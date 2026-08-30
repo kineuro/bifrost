@@ -43,6 +43,29 @@ app.get('/api/cli', async (c) => {
   const version = (await fsp.readFile(path.join(binDir, 'VERSION'), 'utf8').catch(() => 'dev')).trim();
   return c.json({ version, files, base: `${config.publicUrl}/dl/` });
 });
+// The download list: one small page in the site's style, built from what is in bin/.
+app.get('/dl', (c) => c.redirect('/dl/'));
+app.get('/dl/', async (c) => {
+  const version = (await fsp.readFile(path.join(binDir, 'VERSION'), 'utf8').catch(() => 'dev')).trim();
+  const sums = new Map((await fsp.readFile(path.join(binDir, 'SHA256SUMS'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map((l) => { const [h, f] = l.trim().split(/\s+/); return [f, h] as [string, string]; }));
+  const names: Record<string, string> = { 'linux-amd64': 'Linux, x86-64', 'linux-arm64': 'Linux, ARM64', 'darwin-arm64': 'macOS, Apple silicon', 'darwin-amd64': 'macOS, Intel', 'windows-amd64.exe': 'Windows, x86-64', 'windows-arm64.exe': 'Windows, ARM64' };
+  const rows: string[] = [];
+  for (const [key, label] of Object.entries(names)) {
+    const f = `bifrost-${key}`;
+    const st = await fsp.stat(path.join(binDir, f)).catch(() => null);
+    if (!st) continue;
+    rows.push(`<div class="row"><span class="name"><span>${label}</span></span><span class="size">${(st.size / 1e6).toFixed(1)} MB</span><span class="when"><a href="/dl/${f}">${f}</a></span><span class="sum">${sums.get(f) ?? ''}</span></div>`);
+  }
+  const esc = (t: string) => t.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]!));
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Downloads · Bifrost</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/global.css"><style>.sum{grid-column:1/-1;font-family:var(--mono);font-size:11.5px;color:var(--muted);word-break:break-all}.row{grid-template-columns:1fr auto auto}</style></head><body>
+<header class="top"><div class="wrap"><a class="brand" href="/"><span class="mark"></span><span><span class="name">Bifrost</span><br><span class="sub">Karolinska Institutet Neuro Research Group · data bridge</span></span></a><nav class="top"><a href="/">Your bridge</a><a href="/docs/">How to use it</a><a href="/docs/cli/">Command line</a><a href="https://kineuro.se">kineuro.se</a></nav></div></header>
+<main><section class="band last"><div class="wrap" style="display:flex;flex-direction:column;gap:20px"><p class="eyebrow">Downloads</p><h1>The <code>bifrost</code> command, version ${esc(version)}</h1>
+<p class="lede">Pick the build for your system, or let the installer choose: <code>curl -fsSL https://bifrost.kineuro.se/get | sh</code> on Linux and macOS, <code>irm https://bifrost.kineuro.se/get.ps1 | iex</code> on Windows. Each file's SHA-256 is under it; the full list is <a href="/dl/SHA256SUMS">SHA256SUMS</a>. After a manual download: <code>chmod +x</code> on Linux and macOS (and <code>xattr -d com.apple.quarantine bifrost</code> on macOS), then put it on your PATH as <code>bifrost</code>.</p>
+<div class="list">${rows.join('') || '<div class="row"><span class="muted">No builds published yet.</span></div>'}</div>
+<p class="muted" style="font-size:13px">Later, <code>bifrost update</code> replaces the binary in place with whatever version this page shows. <a href="/docs/cli/">How to use the command line</a>.</p></div></section></main>
+<footer><div class="wrap"><span>Bifrost is run by the Karolinska Institutet Neuro Research Group.</span><span>Questions: <a href="mailto:admin@kineuro.se">admin@kineuro.se</a></span></div></footer></body></html>`;
+  return c.html(html);
+});
 app.get('/dl/:file', async (c) => {
   const f = c.req.param('file');
   if (!/^(bifrost-[a-z0-9-]+(\.exe)?|SHA256SUMS|VERSION)$/.test(f)) return c.notFound();
