@@ -91,14 +91,16 @@ function ipToBytes(ip: string): number[] | null {
   return null;
 }
 
-// Simple fixed-window rate limit for token attempts: 20 per 10 minutes per address.
-const attempts = new Map<string, { n: number; t: number }>();
+// Fixed-window limit on FAILED token attempts: after 20 failures in 10 minutes an address must wait. Successes never count.
+const failures = new Map<string, { n: number; t: number }>();
 export function rateLimited(ip: string): boolean {
-  const a = attempts.get(ip);
+  const a = failures.get(ip);
+  return !!a && a.t > Date.now() && a.n >= 20;
+}
+export function recordFailure(ip: string) {
+  const a = failures.get(ip);
   const t = Date.now();
-  if (!a || a.t < t) { attempts.set(ip, { n: 1, t: t + 600_000 }); return false; }
-  a.n++;
-  return a.n > 20;
+  if (!a || a.t < t) failures.set(ip, { n: 1, t: t + 600_000 }); else a.n++;
 }
 
 export function touch(cred: Credential, ip: string) {

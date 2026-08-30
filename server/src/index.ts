@@ -11,7 +11,7 @@ import { admin } from './api/admin.js';
 import { pub } from './api/public.js';
 import { config } from './config.js';
 import { audit, db, now, q } from './db.js';
-import { dropUpload, HttpError, removeShareData } from './files.js';
+import { dropUpload, HttpError, removeShareData, sweepTemp } from './files.js';
 import { metrics, render } from './metrics.js';
 import { notify } from './notify.js';
 import { handleTus } from './tus.js';
@@ -75,6 +75,7 @@ app.get('/*', async (c) => {
 async function housekeeping() {
   const stale = q.staleUploads.all(new Date(Date.now() - 7 * 86400_000).toISOString());
   for (const u of stale) await dropUpload(u.id);
+  await sweepTemp(config.inRoot).catch(() => {});
   const t = now();
   for (const s of q.shares.all()) {
     if (s.status === 'open' && s.expires_at && s.expires_at < t) {

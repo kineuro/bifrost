@@ -9,7 +9,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Readable, Transform, Writable, PassThrough } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { canDownload, canUpload, checkPasscode, credentialFromToken, issueSession, rateLimited, readSession, shareOpen, touch } from '../auth.js';
+import { canDownload, canUpload, checkPasscode, credentialFromToken, issueSession, rateLimited, readSession, recordFailure, shareOpen, touch } from '../auth.js';
 import { config } from '../config.js';
 import { audit, now, q, shareUsage, type Box, type Credential, type Share } from '../db.js';
 import { acquire, checkDownloadBudget, checkQuota, cleanPath, dropUpload, HttpError, listDir, receiveBatch, receiveFile, resolveIn, sendBatch, walk } from '../files.js';
@@ -39,8 +39,8 @@ pub.post('/session', async (c) => {
   if (rateLimited(ip)) return c.json({ error: 'too many attempts, try again in ten minutes' }, 429);
   const body = await c.req.json().catch(() => ({}));
   const cred = credentialFromToken(String(body.token ?? ''));
-  if (!cred) { audit(ip, 'login.failed', null, {}); return c.json({ error: 'that token is not valid' }, 401); }
-  if (!checkPasscode(cred, body.passcode)) return c.json({ error: cred.passcode_hash && !body.passcode ? 'passcode required' : 'wrong passcode', passcode: true }, 401);
+  if (!cred) { recordFailure(ip); audit(ip, 'login.failed', null, {}); return c.json({ error: 'that token is not valid' }, 401); }
+  if (!checkPasscode(cred, body.passcode)) { recordFailure(ip); return c.json({ error: cred.passcode_hash && !body.passcode ? 'passcode required' : 'wrong passcode', passcode: true }, 401); }
   const share = q.share.get(cred.share_id)!;
   const denied = shareOpen(share, ip);
   if (denied) return c.json({ error: denied.error }, denied.status as any);
@@ -57,9 +57,10 @@ pub.use('/*', async (c, next) => {
   let cred: Credential | null = null;
   const auth = c.req.header('authorization');
   if (auth?.startsWith('Bearer ')) {
-    if (rateLimited(ip) && !credentialFromToken(auth.slice(7))) return c.json({ error: 'too many attempts' }, 429);
+    if (rateLimited(ip)) return c.json({ error: 'too many attempts, try again in ten minutes' }, 429);
     cred = credentialFromToken(auth.slice(7));
-    if (cred && !checkPasscode(cred, c.req.header('x-bifrost-passcode'))) return c.json({ error: 'passcode required', passcode: true }, 401);
+    if (!cred) recordFailure(ip);
+    if (cred && !checkPasscode(cred, c.req.header('x-bifrost-passcode'))) { recordFailure(ip); return c.json({ error: 'passcode required', passcode: true }, 401); }
   } else {
     const id = readSession(getCookie(c, 'bfr'));
     if (id) { cred = q.cred.get(id) ?? null; if (cred?.revoked_at) cred = null; }

@@ -43,7 +43,7 @@ export async function listDir(share: Share, box: Box, rel: string): Promise<Entr
   }
   const out: Entry[] = [];
   for (const e of ents) {
-    if (e.name.startsWith('.bifrost')) continue;
+    if (e.name.startsWith('.bifrost') || e.name.includes('.bifrost-tmp')) continue;
     const st = await fsp.stat(path.join(abs, e.name)).catch(() => null);
     if (!st) continue;
     const p = rel ? `${cleanPath(rel)}/${e.name}` : e.name;
@@ -168,6 +168,18 @@ export function acquire(credId: string): (() => void) | null {
   return () => { if (done) return; done = true; total--; active.set(credId, (active.get(credId) ?? 1) - 1); };
 }
 export const streams = () => ({ total, max: config.maxStreams, perClient: config.maxStreamsPerClient });
+
+// Remove abandoned temporary files (a batch that died mid-way) older than a day.
+export async function sweepTemp(root: string) {
+  const rec = async (d: string) => {
+    for (const e of await fsp.readdir(d, { withFileTypes: true }).catch(() => [] as fs.Dirent[])) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) await rec(p);
+      else if (e.name.includes('.bifrost-tmp')) { const st = await fsp.stat(p).catch(() => null); if (st && Date.now() - st.mtimeMs > 86400_000) await fsp.unlink(p).catch(() => {}); }
+    }
+  };
+  await rec(root);
+}
 
 // Delete an upload's partial file and record.
 export async function dropUpload(id: string) {
