@@ -227,7 +227,7 @@ import Base from '../layouts/Base.astro';
   $('fileInput').addEventListener('change', (e) => { for (const f of (e.target as HTMLInputElement).files ?? []) enqueue(f, f.name); (e.target as HTMLInputElement).value = ''; });
   $('folderInput').addEventListener('change', (e) => { for (const f of (e.target as HTMLInputElement).files ?? []) enqueue(f, (f as any).webkitRelativePath || f.name); (e.target as HTMLInputElement).value = ''; });
   const drop = $('drop');
-  ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.style.borderColor = 'var(--plum)'; }));
+  ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.style.borderColor = 'var(--link)'; }));
   ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.style.borderColor = ''; }));
   drop.addEventListener('drop', async (e) => {
     const items = [...(e.dataTransfer?.items ?? [])];

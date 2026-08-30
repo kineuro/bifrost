@@ -6,6 +6,9 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+### Added
+- Dark theme (follows the system, with a light/dark toggle in the header) on the partner page and the docs.
+
 ## [1.0.1] - 2026-08-30
 
 ### Changed

@@ -12,15 +12,17 @@ const { title, description = 'Bifrost: the data bridge of Experimental Neuroradi
     <title>{title} · Bifrost</title>
     <meta name="description" content={description} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script is:inline>try{const t=localStorage.getItem("theme");if(t==="dark"||t==="light")document.documentElement.dataset.theme=t;}catch{}</script>
   </head>
   <body>
     <header class="top">
       <div class="wrap">
         <a class="brand" href="/"><img src="/kineuro-mark.svg" alt="" width="26" height="26" /><span><span class="name">Bifrost</span><br /><span class="sub">Experimental Neuroradiology Research at Karolinska Institutet · data bridge</span></span></a>
-        <nav class="top"><a href="/">Your bridge</a><a href="/docs/">How to use it</a><a href="/docs/cli/">Command line</a><a href="https://kineuro.se">kineuro.se</a></nav>
+        <nav class="top"><a href="/">Your bridge</a><a href="/docs/">How to use it</a><a href="/docs/cli/">Command line</a><a href="https://kineuro.se">kineuro.se</a><button type="button" class="theme" data-theme-toggle title="Light, dark or as the system" aria-label="Switch theme"><span class="sun"></span></button></nav>
       </div>
     </header>
     <main><slot /></main>
+    <script is:inline>document.querySelectorAll('[data-theme-toggle]').forEach((b)=>b.addEventListener('click',()=>{const r=document.documentElement;const cur=r.dataset.theme||'system';const next=cur==='system'?'dark':cur==='dark'?'light':'system';try{if(next==='system'){localStorage.removeItem('theme');delete r.dataset.theme;}else{localStorage.setItem('theme',next);r.dataset.theme=next;}}catch{}}));</script>
     <footer><div class="wrap"><span>Bifrost is run by Experimental Neuroradiology Research at Karolinska Institutet. Every transfer is checked byte for byte and recorded.</span><span>Questions: <a href="mailto:admin@kineuro.se">admin@kineuro.se</a></span></div></footer>
   </body>
 </html>
