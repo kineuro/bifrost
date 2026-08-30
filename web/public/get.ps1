@@ -8,7 +8,7 @@ $rel = 'https://github.com/kineuro/bifrost/releases/latest/download'
 $dir = Join-Path $env:LOCALAPPDATA 'Programs\bifrost'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $dest = Join-Path $dir 'bifrost.exe'
-try { Invoke-WebRequest -Uri "$rel/$file" -OutFile "$dest.tmp" -UseBasicParsing; $src = $rel; Write-Host "downloaded $file from the latest GitHub release" }
+try { Invoke-WebRequest -Uri "$rel/$file" -OutFile "$dest.tmp" -UseBasicParsing -TimeoutSec 300; $src = $rel; Write-Host "downloaded $file from the latest GitHub release" }
 catch { $src = "$base/dl"; Write-Host "downloading $src/$file"; Invoke-WebRequest -Uri "$src/$file" -OutFile "$dest.tmp" -UseBasicParsing }
 $sums = (Invoke-WebRequest -Uri "$src/SHA256SUMS" -UseBasicParsing).Content
 $line = ($sums -split "`n") | Where-Object { $_ -match " $file$" }

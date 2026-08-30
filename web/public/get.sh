@@ -12,8 +12,8 @@ file="bifrost-$os-$arch"
 if [ "$(id -u)" = 0 ]; then dir=/usr/local/bin; else dir="$HOME/.local/bin"; fi
 mkdir -p "$dir"
 tmp=$(mktemp)
-if curl -fsSL "$REL/$file" -o "$tmp" 2>/dev/null; then src="$REL"; echo "downloaded $file from the latest GitHub release"; else src="$BASE/dl"; echo "downloading $src/$file"; curl -fsSL "$src/$file" -o "$tmp"; fi
-sum=$(curl -fsSL "$src/SHA256SUMS" | grep " $file\$" | awk '{print $1}')
+if curl -fsSL --connect-timeout 10 --max-time 300 "$REL/$file" -o "$tmp" 2>/dev/null; then src="$REL"; echo "downloaded $file from the latest GitHub release"; else src="$BASE/dl"; echo "downloading $src/$file"; curl -fsSL "$src/$file" -o "$tmp"; fi
+sum=$(curl -fsSL --connect-timeout 10 --max-time 60 "$src/SHA256SUMS" | grep " $file\$" | awk '{print $1}')
 if [ -n "$sum" ]; then
   have=$( (sha256sum "$tmp" 2>/dev/null || shasum -a 256 "$tmp") | awk '{print $1}')
   [ "$have" = "$sum" ] || { echo "checksum mismatch, aborting"; rm -f "$tmp"; exit 1; }
