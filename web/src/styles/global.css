@@ -45,7 +45,7 @@ input:focus { outline: 2px solid var(--plum); outline-offset: 1px; border-color:
 header.top { border-bottom: 1px solid var(--rule); background: var(--ground); }
 header.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-top: 18px; padding-bottom: 18px; }
 .brand { display: flex; align-items: center; gap: 12px; color: var(--ink); }
-.brand .mark { width: 22px; height: 22px; background: var(--plum); }
+.brand img { width: 26px; height: 26px; display: block; }
 .brand .name { font-family: var(--serif); font-size: 22px; }
 .brand .sub { font-size: 12px; color: var(--muted); }
 nav.top { display: flex; gap: 22px; font-size: 14px; font-weight: 500; }
