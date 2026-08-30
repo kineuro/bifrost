@@ -1,0 +1,248 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base title="Your bridge">
+  <!-- Sign in -->
+  <section class="band" id="login">
+    <div class="wrap" style="display:grid;grid-template-columns:1.1fr 1fr;gap:48px;align-items:start">
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <p class="eyebrow">Bifrost</p>
+        <h1>A bridge for your data, opened by the group for you.</h1>
+        <p class="lede">You were given a link or a token by the Karolinska Institutet Neuro Research Group. It opens one bridge: a place where you send us files, download the files we prepared for you, or both. Nothing to install; your browser is enough. For terabytes or thousands of files, the <a href="/docs/cli/">command line tool</a> is faster and resumes on its own.</p>
+      </div>
+      <form class="card" id="loginForm" style="gap:14px">
+        <label><span class="eyebrow">Token</span><input type="password" id="token" autocomplete="off" spellcheck="false" placeholder="bfr_…" /></label>
+        <label id="passRow" hidden><span class="eyebrow">Passcode</span><input type="password" id="passcode" autocomplete="off" /></label>
+        <p class="box bad" id="loginError" hidden></p>
+        <div style="display:flex;gap:10px;align-items:center"><button class="button" type="submit">Open the bridge</button><span class="muted" style="font-size:13px">Your token stays in this browser only.</span></div>
+      </form>
+    </div>
+  </section>
+
+  <!-- The bridge -->
+  <section class="band" id="bridge" hidden>
+    <div class="wrap" style="display:flex;flex-direction:column;gap:26px">
+      <div style="display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:flex-start">
+        <div style="display:flex;flex-direction:column;gap:8px;max-width:44rem">
+          <p class="eyebrow" id="bPartner"></p>
+          <h1 id="bName"></h1>
+          <p class="lede" id="bMessage"></p>
+          <p class="muted" style="font-size:14px" id="bMeta"></p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+          <button class="button ghost small" id="logout">Close</button>
+          <span class="muted" style="font-size:12.5px" id="bCred"></span>
+        </div>
+      </div>
+      <div id="quota" hidden style="max-width:26rem;display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;font-size:13px"><span>Space used</span><span class="mono" id="quotaText"></span></div><div class="bar" id="quotaBar"><i></i></div></div>
+      <p class="box warn" id="bNotice" hidden></p>
+
+      <div style="display:flex;gap:6px;border-bottom:1px solid var(--rule)" id="tabs">
+        <button class="button ghost small" data-tab="out" id="tabOut" style="border-bottom:none">Files for you</button>
+        <button class="button ghost small" data-tab="in" id="tabIn" style="border-bottom:none">Send files</button>
+      </div>
+
+      <!-- Download side -->
+      <div id="paneOut" hidden style="display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+          <div class="mono" id="crumbOut" style="font-size:13.5px"></div>
+          <button class="button small" id="zipAll">Download this folder as zip</button>
+        </div>
+        <div class="list" id="listOut"></div>
+        <p class="muted" style="font-size:13px">Large files resume if the connection drops; your browser asks for the missing part only. For a whole tree at full speed use <a href="/docs/cli/"><code>bifrost pull</code></a>.</p>
+      </div>
+
+      <!-- Upload side -->
+      <div id="paneIn" hidden style="display:flex;flex-direction:column;gap:16px">
+        <div id="drop" class="card" style="align-items:center;text-align:center;padding:40px;border-style:dashed;gap:8px">
+          <h3>Drop files or folders here</h3>
+          <p class="muted" style="font-size:14px">Folder structure is kept. Uploads resume after a lost connection as long as this tab stays open; each file is verified byte for byte before it counts as received.</p>
+          <div style="display:flex;gap:10px;margin-top:6px"><button class="button small" id="pickFiles">Choose files</button><button class="button ghost small" id="pickFolder">Choose a folder</button></div>
+          <input type="file" id="fileInput" multiple hidden /><input type="file" id="folderInput" webkitdirectory multiple hidden />
+        </div>
+        <div id="queueWrap" hidden style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;justify-content:space-between;font-size:13px"><span id="queueSummary"></span><span class="mono" id="queueSpeed"></span></div>
+          <div class="bar" id="queueBar"><i></i></div>
+          <div class="list" id="queue" style="max-height:320px;overflow:auto"></div>
+        </div>
+        <div>
+          <p class="eyebrow" style="margin-bottom:8px">Already received</p>
+          <div class="mono" id="crumbIn" style="font-size:13.5px;margin-bottom:8px"></div>
+          <div class="list" id="listIn"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<script>
+  import * as tus from 'tus-js-client';
+  const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+  const fmt = (n: number) => { const u = ['B', 'kB', 'MB', 'GB', 'TB']; let i = 0; while (n >= 1000 && i < 4) { n /= 1000; i++; } return `${i ? n.toFixed(1) : n} ${u[i]}`; };
+  const when = (s: string) => new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  type Share = { id: string; name: string; partner: string; direction: string; message: string; status: string; expires_at: string | null; quota_bytes: number; max_files: number; used_bytes: number; files: number; can_upload: boolean; can_download: boolean };
+  let share: Share | null = null; let cred: { id: string; label: string } | null = null;
+  let pathOut = '', pathIn = '';
+
+  async function api(path: string, init: RequestInit = {}) {
+    const r = await fetch(`/api${path}`, { ...init, headers: { 'content-type': 'application/json', ...(init.headers ?? {}) }, credentials: 'same-origin' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(j.error ?? `HTTP ${r.status}`), { status: r.status, passcode: j.passcode });
+    return j;
+  }
+
+  // Sign in: token from the URL fragment (a link) or the field.
+  const hashToken = location.hash.startsWith('#bfr_') ? location.hash.slice(1) : '';
+  if (hashToken) { $<HTMLInputElement>('token').value = hashToken; history.replaceState(null, '', location.pathname); }
+  $('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('loginError'); err.hidden = true;
+    try {
+      const j = await api('/session', { method: 'POST', body: JSON.stringify({ token: $<HTMLInputElement>('token').value.trim(), passcode: $<HTMLInputElement>('passcode').value || undefined }) });
+      open(j.share, j.credential);
+    } catch (x: any) {
+      if (x.passcode) { $('passRow').hidden = false; $('passcode').focus(); }
+      err.textContent = x.message; err.hidden = false;
+    }
+  });
+  api('/share').then((j) => open(j.share, j.credential)).catch(() => { if (hashToken) $('loginForm').dispatchEvent(new Event('submit')); });
+  $('logout').addEventListener('click', async () => { await api('/logout', { method: 'POST' }).catch(() => {}); location.reload(); });
+
+  function open(s: Share, c: { id: string; label: string }) {
+    share = s; cred = c;
+    $('login').hidden = true; $('bridge').hidden = false;
+    $('bPartner').textContent = s.partner ? `For ${s.partner}` : 'Your bridge';
+    $('bName').textContent = s.name;
+    $('bMessage').textContent = s.message; $('bMessage').hidden = !s.message;
+    const meta: string[] = [];
+    meta.push(s.direction === 'both' ? 'You can send and receive.' : s.direction === 'in' ? 'You can send files to the group.' : 'You can download the files prepared for you.');
+    if (s.expires_at) meta.push(`The bridge closes on ${new Date(s.expires_at).toLocaleDateString(undefined, { dateStyle: 'long' })}.`);
+    $('bMeta').textContent = meta.join(' ');
+    $('bCred').textContent = c.label ? `Signed in as ${c.label}` : '';
+    refreshQuota();
+    $('tabOut').hidden = !s.can_download; $('tabIn').hidden = !(s.direction === 'in' || s.direction === 'both');
+    if (!s.can_upload && (s.direction === 'in' || s.direction === 'both')) { $('bNotice').textContent = s.status === 'frozen' ? 'This bridge no longer accepts uploads; what you already sent is kept.' : 'Uploads are closed on this bridge.'; $('bNotice').hidden = false; }
+    showTab(s.can_download ? 'out' : 'in');
+  }
+  function refreshQuota() {
+    if (!share) return;
+    const q = $('quota'); if (!share.quota_bytes) { q.hidden = true; return; }
+    q.hidden = false;
+    const pct = Math.min(100, (share.used_bytes / share.quota_bytes) * 100);
+    $('quotaText').textContent = `${fmt(share.used_bytes)} of ${fmt(share.quota_bytes)}`;
+    const bar = $('quotaBar'); (bar.firstElementChild as HTMLElement).style.width = `${pct}%`; bar.className = `bar${pct > 95 ? ' bad' : ''}`;
+  }
+  function showTab(t: 'in' | 'out') {
+    $('paneOut').hidden = t !== 'out'; $('paneIn').hidden = t !== 'in';
+    $('tabOut').classList.toggle('ghost', t !== 'out'); $('tabIn').classList.toggle('ghost', t !== 'in');
+    if (t === 'out') listOut(); else listIn();
+  }
+  $('tabOut').addEventListener('click', () => showTab('out'));
+  $('tabIn').addEventListener('click', () => showTab('in'));
+
+  function crumbs(el: HTMLElement, p: string, go: (p: string) => void) {
+    el.innerHTML = '';
+    const parts = p ? p.split('/') : [];
+    const add = (label: string, target: string, last: boolean) => {
+      const a = document.createElement(last ? 'span' : 'a'); a.textContent = label; if (!last) { (a as HTMLAnchorElement).href = '#'; a.addEventListener('click', (e) => { e.preventDefault(); go(target); }); }
+      el.appendChild(a); if (!last) el.appendChild(document.createTextNode(' / '));
+    };
+    add(share?.id ?? '', '', parts.length === 0);
+    parts.forEach((s, i) => add(s, parts.slice(0, i + 1).join('/'), i === parts.length - 1));
+  }
+  function rowFor(e: any, box: 'in' | 'out', go: (p: string) => void) {
+    const r = document.createElement('div'); r.className = 'row';
+    const n = document.createElement('div'); n.className = 'name';
+    if (e.dir) { const a = document.createElement('a'); a.href = '#'; a.className = 'dir'; a.textContent = e.name; a.addEventListener('click', (x) => { x.preventDefault(); go(e.path); }); n.appendChild(a); }
+    else { const s = document.createElement('span'); s.textContent = e.name; n.appendChild(s); if (e.sha256 && box === 'in') { const t = document.createElement('span'); t.className = 'tag ok'; t.textContent = 'verified'; n.appendChild(t); } }
+    r.appendChild(n);
+    const sz = document.createElement('span'); sz.className = 'size'; sz.textContent = e.dir ? '' : fmt(e.size); r.appendChild(sz);
+    const w = document.createElement('span'); w.className = 'when';
+    if (box === 'out' && !e.dir) { const a = document.createElement('a'); a.href = `/api/download?box=out&path=${encodeURIComponent(e.path)}`; a.textContent = 'Download'; a.setAttribute('download', e.name); w.appendChild(a); }
+    else if (box === 'out' && e.dir) { const a = document.createElement('a'); a.href = `/api/download/zip?box=out&path=${encodeURIComponent(e.path)}`; a.textContent = 'zip'; w.appendChild(a); }
+    else w.textContent = when(e.mtime);
+    r.appendChild(w);
+    return r;
+  }
+  async function listOut(p = pathOut) {
+    pathOut = p; crumbs($('crumbOut'), p, listOut);
+    const j = await api(`/ls?box=out&path=${encodeURIComponent(p)}`);
+    const l = $('listOut'); l.innerHTML = '';
+    if (!j.entries.length) { l.innerHTML = '<p class="muted" style="padding:14px 0">Nothing here yet.</p>'; }
+    for (const e of j.entries) l.appendChild(rowFor(e, 'out', listOut));
+    ($('zipAll') as HTMLButtonElement).onclick = () => { location.href = `/api/download/zip?box=out&path=${encodeURIComponent(p)}`; };
+  }
+  async function listIn(p = pathIn) {
+    pathIn = p; crumbs($('crumbIn'), p, listIn);
+    const j = await api(`/sent?path=${encodeURIComponent(p)}`);
+    const l = $('listIn'); l.innerHTML = '';
+    if (!j.entries.length) { l.innerHTML = '<p class="muted" style="padding:14px 0">Nothing received yet.</p>'; }
+    for (const e of j.entries) l.appendChild(rowFor(e, 'in', listIn));
+  }
+
+  // Uploads: tus, three files at a time, folder structure from webkitRelativePath or the drop entries.
+  type Item = { file: File; rel: string; el: HTMLElement; bar: HTMLElement; status: HTMLElement; done: boolean; sent: number; err?: string };
+  const queue: Item[] = []; let running = 0; const MAX = 3; let lastBytes = 0, lastT = Date.now(), speed = 0;
+  function enqueue(file: File, rel: string) {
+    if (!share?.can_upload) return;
+    rel = rel.replace(/^\/+/, '');
+    if (rel.split('/').some((s) => s.startsWith('.'))) return; // skip hidden files (.DS_Store and friends)
+    const el = document.createElement('div'); el.style.display = 'flex'; el.style.flexDirection = 'column'; el.style.gap = '4px';
+    el.innerHTML = `<div class="row"><div class="name"><span>${rel}</span></div><span class="size">${fmt(file.size)}</span><span class="when"></span></div><div class="bar"><i></i></div>`;
+    const it: Item = { file, rel, el, bar: el.querySelector('.bar i')!, status: el.querySelector('.when')!, done: false, sent: 0 };
+    queue.push(it); $('queue').appendChild(el); $('queueWrap').hidden = false; pump();
+  }
+  function pump() {
+    while (running < MAX) {
+      const next = queue.find((i) => !i.done && !i.err && !(i as any).started);
+      if (!next) break;
+      (next as any).started = true; running++; start(next);
+    }
+    summary();
+  }
+  function start(it: Item) {
+    it.status.textContent = 'sending';
+    const u = new tus.Upload(it.file, {
+      endpoint: '/api/tus', retryDelays: [1000, 3000, 5000, 10000, 20000, 30000], chunkSize: 32 * 1024 * 1024, removeFingerprintOnSuccess: true, storeFingerprintForResuming: true,
+      metadata: { filename: it.file.name, filetype: it.file.type, relativePath: it.rel },
+      onError: (e) => { running--; it.err = String((e as any)?.originalResponse?.getBody?.() || e.message || e); it.status.textContent = it.err.slice(0, 60); it.bar.parentElement!.classList.add('bad'); pump(); },
+      onProgress: (sent) => { it.sent = sent; it.bar.style.width = `${(sent / it.file.size) * 100}%`; summary(); },
+      onSuccess: () => { running--; it.done = true; it.sent = it.file.size; it.bar.style.width = '100%'; it.bar.parentElement!.classList.add('ok'); it.status.textContent = 'verified'; share!.used_bytes += it.file.size; share!.files++; refreshQuota(); pump(); if (queue.every((q) => q.done || q.err)) { finished(); } },
+    });
+    u.findPreviousUploads().then((prev) => { if (prev.length) u.resumeFromPreviousUpload(prev[0]); u.start(); });
+  }
+  function summary() {
+    const done = queue.filter((i) => i.done).length, total = queue.length, bytes = queue.reduce((n, i) => n + i.sent, 0), all = queue.reduce((n, i) => n + i.file.size, 0);
+    $('queueSummary').textContent = `${done} of ${total} files sent · ${fmt(bytes)} of ${fmt(all)}`;
+    ($('queueBar').firstElementChild as HTMLElement).style.width = `${all ? (bytes / all) * 100 : 0}%`;
+    const t = Date.now(); if (t - lastT > 1000) { speed = ((bytes - lastBytes) / (t - lastT)) * 1000; lastBytes = bytes; lastT = t; $('queueSpeed').textContent = speed > 0 ? `${fmt(speed)}/s` : ''; }
+  }
+  async function finished() {
+    const files = queue.filter((i) => i.done).length, bytes = queue.filter((i) => i.done).reduce((n, i) => n + i.file.size, 0);
+    if (files) await api('/upload/done', { method: 'POST', body: JSON.stringify({ files, bytes }) }).catch(() => {});
+    $('queueSpeed').textContent = 'done'; listIn();
+  }
+  $('pickFiles').addEventListener('click', () => $('fileInput').click());
+  $('pickFolder').addEventListener('click', () => $('folderInput').click());
+  $('fileInput').addEventListener('change', (e) => { for (const f of (e.target as HTMLInputElement).files ?? []) enqueue(f, f.name); (e.target as HTMLInputElement).value = ''; });
+  $('folderInput').addEventListener('change', (e) => { for (const f of (e.target as HTMLInputElement).files ?? []) enqueue(f, (f as any).webkitRelativePath || f.name); (e.target as HTMLInputElement).value = ''; });
+  const drop = $('drop');
+  ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.style.borderColor = 'var(--plum)'; }));
+  ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.style.borderColor = ''; }));
+  drop.addEventListener('drop', async (e) => {
+    const items = [...(e.dataTransfer?.items ?? [])];
+    const entries = items.map((i) => (i as any).webkitGetAsEntry?.()).filter(Boolean);
+    if (!entries.length) { for (const f of e.dataTransfer?.files ?? []) enqueue(f, f.name); return; }
+    for (const en of entries) await walkEntry(en, '');
+  });
+  function walkEntry(entry: any, prefix: string): Promise<void> {
+    return new Promise((resolve) => {
+      if (entry.isFile) entry.file((f: File) => { enqueue(f, prefix + f.name); resolve(); });
+      else if (entry.isDirectory) {
+        const reader = entry.createReader(); const all: any[] = [];
+        const read = () => reader.readEntries(async (batch: any[]) => { if (!batch.length) { for (const x of all) await walkEntry(x, `${prefix}${entry.name}/`); resolve(); } else { all.push(...batch); read(); } });
+        read();
+      } else resolve();
+    });
+  }
+</script>

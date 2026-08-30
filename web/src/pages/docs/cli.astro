@@ -1,0 +1,76 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+<Base title="Command line">
+  <section class="band">
+    <div class="wrap" style="display:flex;flex-direction:column;gap:12px">
+      <p class="eyebrow">Command line</p>
+      <h1>The <code>bifrost</code> tool for large transfers</h1>
+      <p class="lede">One small program for Linux, macOS and Windows. It uses the same token as the browser, sends or fetches whole folder trees with several streams at once, packs small files together so thousands of them travel as a few streams, resumes after any interruption, and verifies every file. Nothing else to install.</p>
+    </div>
+  </section>
+  <section class="band last">
+    <div class="wrap prose">
+      <h2>Install</h2>
+      <p>Linux or macOS (puts <code>bifrost</code> in <code>~/.local/bin</code>):</p>
+      <pre><code>curl -fsSL https://bifrost.kineuro.se/get | sh</code></pre>
+      <p>Windows (PowerShell):</p>
+      <pre><code>irm https://bifrost.kineuro.se/get.ps1 | iex</code></pre>
+      <p>Or download a binary from <a href="/dl/">the download list</a>: <code>bifrost-linux-amd64</code>, <code>bifrost-linux-arm64</code>, <code>bifrost-darwin-amd64</code>, <code>bifrost-darwin-arm64</code>, <code>bifrost-windows-amd64.exe</code>. Checksums are in <code>SHA256SUMS</code>. Later, <code>bifrost update</code> fetches the newest version.</p>
+      <div class="box">macOS may say the program is from an unidentified developer. The installer clears that flag; for a manual download run <code>xattr -d com.apple.quarantine bifrost</code> once.</div>
+
+      <h2>Sign in</h2>
+      <pre><code>bifrost login bfr_…            # the token, or the whole link you were given
+bifrost status                  # what the bridge allows and how much is used</code></pre>
+      <p>The token is saved in your user configuration folder (<code>~/.config/bifrost/config.json</code> on Linux, <code>~/Library/Application Support/bifrost</code> on macOS, <code>%AppData%\bifrost</code> on Windows). For scripts, set <code>BIFROST_TOKEN</code> instead and skip <code>login</code>. If the bridge has a passcode, <code>login</code> asks for it once.</p>
+
+      <h2>Send a folder</h2>
+      <pre><code>bifrost push /data/study_2026</code></pre>
+      <p>This indexes the folder, asks the bridge which files it already has, then sends the rest. On the bridge the data lands under a folder with the same name (<code>study_2026/</code>); use <code>--to</code> to choose another name. When it finishes, every file has been verified by checksum and the group is notified.</p>
+      <p>What you see while it runs:</p>
+      <pre><code>306475 files indexed; 0 already on the bridge; 306475 to send (1.9 TB); 6 streams
+ 37.2%  707.1 GB of 1.9 TB  114020/306475 files  312.4 MB/s  eta 1h04m</code></pre>
+      <div class="box"><strong>Interrupted?</strong> Press Ctrl-C, close the laptop, lose the network: nothing is lost. Run the same command again and it continues from where it stopped, on any computer that has the same data and token. Files already on the bridge are skipped in seconds.</div>
+
+      <h2>Fetch what was prepared for you</h2>
+      <pre><code>bifrost ls                       # see what is there
+bifrost pull /data/from_kineuro    # fetch everything into that folder
+bifrost pull ./sub --from release_2026/derivatives   # only one folder</code></pre>
+      <p>Files already present locally with the right size are skipped (add <code>--checksum</code> to compare hashes too). Big files are fetched in parallel parts and resume; small files arrive packed together.</p>
+
+      <h2>Check afterwards</h2>
+      <pre><code>bifrost verify /data/study_2026</code></pre>
+      <p>Hashes every local file and compares with the bridge. Exit code 0 means everything matches.</p>
+
+      <h2>Options</h2>
+      <table>
+        <tr><th>Option</th><th>Meaning</th></tr>
+        <tr><td><code>--to &lt;path&gt;</code></td><td><em>push</em>: put the data under this folder on the bridge (default: the folder's own name)</td></tr>
+        <tr><td><code>--from &lt;path&gt;</code></td><td><em>pull</em>: fetch only this folder</td></tr>
+        <tr><td><code>--workers &lt;n&gt;</code></td><td>parallel streams (default 6; the bridge sets a ceiling and tells the tool to wait when it is busy)</td></tr>
+        <tr><td><code>--limit 50M</code></td><td>bandwidth cap in bytes per second (K, M, G suffixes), for a shared office line</td></tr>
+        <tr><td><code>--exclude '*.tmp'</code></td><td>skip matching names or paths; repeatable</td></tr>
+        <tr><td><code>--checksum</code></td><td>hash everything first and skip only exact matches (default: same size counts as present)</td></tr>
+        <tr><td><code>--dry-run</code></td><td>list what would be transferred and stop</td></tr>
+        <tr><td><code>--json</code></td><td>one JSON line per event, for scripts and schedulers</td></tr>
+      </table>
+      <p>Exit codes: <code>0</code> everything done, <code>2</code> some files failed (run again), <code>130</code> interrupted (run again).</p>
+
+      <h2>How it goes fast</h2>
+      <ul>
+        <li>Files of 64 MB or more are sent as 32 MB parts, several in flight per file, each part checked on arrival.</li>
+        <li>Smaller files are packed into batches (about 256 MB or 5,000 files), compressed on the fly and sent as one stream, so a DICOM study with hundreds of thousands of small files is a few hundred requests instead of a few hundred thousand.</li>
+        <li>Six streams by default; the bridge has a global budget and asks the tool to pause briefly when many partners transfer at once, so nobody's transfer starves the others.</li>
+        <li>The bridge keeps the list of what it has received, so a resume needs no local state and works from another machine.</li>
+      </ul>
+
+      <h2>Scheduled or scripted transfers</h2>
+      <pre><code>export BIFROST_TOKEN=bfr_…
+bifrost push /export/nightly --to nightly --json >> bifrost.log || echo "some files failed, will retry tomorrow"</code></pre>
+      <p>A nightly job that re-runs the same push is safe: unchanged files are skipped, new or changed files are sent, and the exit code tells you whether to look at the log.</p>
+
+      <h2>Where does the data go?</h2>
+      <p>Into an isolated exchange area on the group's storage server, one folder per bridge, reachable only by this service and the group's administrators. Nothing you send is mixed with anything else until an administrator reviews and accepts it into a study. Problems or questions: <a href="mailto:admin@kineuro.se">admin@kineuro.se</a>.</p>
+    </div>
+  </section>
+</Base>

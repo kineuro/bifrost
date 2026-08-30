@@ -1,0 +1,54 @@
+name: build and deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.24', cache-dependency-path: cli/go.sum }
+
+      - name: version
+        id: v
+        run: echo "v=$(date -u +%Y.%m.%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: build the server once here, so a broken commit never reaches the VM
+        run: |
+          (cd web && npm ci && npm run build)
+          (cd server && npm ci && npm run build)
+
+      - name: build the CLI for every platform
+        working-directory: cli
+        env: { CGO_ENABLED: '0' }
+        run: |
+          mkdir -p ../bin
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os=${t%/*}; arch=${t#*/}; out=../bin/bifrost-$os-$arch; [ $os = windows ] && out=$out.exe
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${{ steps.v.outputs.v }}" -o $out .
+          done
+          (cd ../bin && sha256sum bifrost-* > SHA256SUMS && echo "${{ steps.v.outputs.v }}" > VERSION && ls -la)
+
+      - name: sync to the VM and restart (through the Warpgate gateway)
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m 600 /dev/null key; printf '%s\n' "$KEY" > key
+          cat > sshcfg <<'CFG'
+          Host bifrost
+            HostName ssh.kineuro.se
+            User deploy:bifrost-deploy
+            IdentityFile key
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ProxyCommand openssl s_client -quiet -connect ssh.kineuro.se:443 -servername ssh.kineuro.se 2>/dev/null
+          CFG
+          rsync -az --delete --exclude node_modules --exclude 'server/public' --exclude 'server/dist' --exclude .git --exclude .env --exclude key --exclude sshcfg --exclude 'cli/bin' -e "ssh -F sshcfg" ./ bifrost:/srv/bifrost/
+          ssh -F sshcfg bifrost "cd /srv/bifrost && BIFROST_VERSION=${{ steps.v.outputs.v }} docker compose up -d --build 2>&1 | tail -3 && docker image prune -f >/dev/null && sleep 3 && curl -s http://127.0.0.1:8080/api/health"
