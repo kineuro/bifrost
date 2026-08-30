@@ -20,8 +20,19 @@ import Base from '../../layouts/Base.astro';
       <div class="box">macOS may say the program is from an unidentified developer. The installer clears that flag; for a manual download run <code>xattr -d com.apple.quarantine bifrost</code> once.</div>
 
       <h2>Sign in</h2>
-      <pre><code>bifrost login bfr_…            # the token, or the whole link you were given
-bifrost status                  # what the bridge allows and how much is used</code></pre>
+      <pre><code>bifrost login bfr_…            # the token, or the whole link you were given</code></pre>
+      <p>Login shows what the token opens, so you know before sending anything:</p>
+      <pre><code>────────────────────────────────────────────────────────────────
+  MS cohort from Uppsala
+  for Uppsala University, Dr Lind (token: Dr Lind)
+────────────────────────────────────────────────────────────────
+  you can        send files to the group (no download)
+  status         open, closes 2026-12-31 (122 days left)
+  space          0 B of 2.0 TB used
+  message        Please send the T1 and FLAIR series, anonymised.
+  bridge         https://bifrost.kineuro.se (ms-cohort-from-uppsala)
+────────────────────────────────────────────────────────────────</code></pre>
+      <p><code>bifrost status</code> prints the same summary at any time, with the current usage.</p>
       <p>The token is saved in your user configuration folder (<code>~/.config/bifrost/config.json</code> on Linux, <code>~/Library/Application Support/bifrost</code> on macOS, <code>%AppData%\bifrost</code> on Windows). For scripts, set <code>BIFROST_TOKEN</code> instead and skip <code>login</code>. If the bridge has a passcode, <code>login</code> asks for it once.</p>
 
       <h2>Send a folder</h2>
