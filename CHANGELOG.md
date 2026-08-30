@@ -6,6 +6,9 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+### Changed
+- Installers and `bifrost update` fetch the CLI from the latest GitHub release, with the bridge's `/dl/` as fallback; the deploy takes the release binaries instead of building its own.
+
 ## [1.0.0] - 2026-08-30
 
 First release, in production at bifrost.kineuro.se.

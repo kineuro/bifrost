@@ -1455,38 +1455,52 @@ func cmdVerify(ctx context.Context, args []string) error {
 
 func cmdUpdate() error {
 	cfg := loadConfig()
-	fmt.Println("fetching the newest version from", cfg.URL)
-	res, err := http.Get(cfg.URL + "/api/cli")
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	var info struct {
-		Version string `json:"version"`
-		Base    string `json:"base"`
-	}
-	if err := json.NewDecoder(res.Body).Decode(&info); err != nil {
-		return err
-	}
-	if info.Version == version {
-		fmt.Println("already up to date:", version)
-		return nil
-	}
 	name := fmt.Sprintf("bifrost-%s-%s", runtimeOS(), runtimeArch())
 	if runtimeOS() == "windows" {
 		name += ".exe"
 	}
+	// The newest version lives on GitHub Releases; the bridge itself is the fallback (it serves what it was deployed with).
+	latest, base := "", ""
+	if res, err := http.Get("https://api.github.com/repos/kineuro/bifrost/releases/latest"); err == nil {
+		var r struct {
+			Tag string `json:"tag_name"`
+		}
+		if json.NewDecoder(res.Body).Decode(&r) == nil && r.Tag != "" {
+			latest, base = strings.TrimPrefix(r.Tag, "v"), "https://github.com/kineuro/bifrost/releases/download/"+r.Tag+"/"
+		}
+		res.Body.Close()
+	}
+	if latest == "" {
+		res, err := http.Get(cfg.URL + "/api/cli")
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		var info struct {
+			Version string `json:"version"`
+			Base    string `json:"base"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&info); err != nil {
+			return err
+		}
+		latest, base = info.Version, info.Base
+	}
+	if latest == version || strings.HasPrefix(version, latest+"+") {
+		fmt.Println("already up to date:", version)
+		return nil
+	}
+	fmt.Printf("updating %s -> %s\n", version, latest)
 	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	r2, err := http.Get(info.Base + name)
+	r2, err := http.Get(base + name)
 	if err != nil {
 		return err
 	}
 	defer r2.Body.Close()
 	if r2.StatusCode != 200 {
-		return fmt.Errorf("no build for %s", name)
+		return fmt.Errorf("no build for %s at %s", name, base)
 	}
 	tmp := self + ".new"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
@@ -1504,6 +1518,6 @@ func cmdUpdate() error {
 	if err := os.Rename(tmp, self); err != nil {
 		return err
 	}
-	fmt.Println("updated to", info.Version)
+	fmt.Println("updated to", latest)
 	return nil
 }

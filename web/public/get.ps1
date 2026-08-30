@@ -4,12 +4,13 @@ $ErrorActionPreference = 'Stop'
 $base = if ($env:BIFROST_URL) { $env:BIFROST_URL } else { 'https://bifrost.kineuro.se' }
 $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }
 $file = "bifrost-windows-$arch.exe"
+$rel = 'https://github.com/kineuro/bifrost/releases/latest/download'
 $dir = Join-Path $env:LOCALAPPDATA 'Programs\bifrost'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $dest = Join-Path $dir 'bifrost.exe'
-Write-Host "downloading $base/dl/$file"
-Invoke-WebRequest -Uri "$base/dl/$file" -OutFile "$dest.tmp" -UseBasicParsing
-$sums = (Invoke-WebRequest -Uri "$base/dl/SHA256SUMS" -UseBasicParsing).Content
+try { Invoke-WebRequest -Uri "$rel/$file" -OutFile "$dest.tmp" -UseBasicParsing; $src = $rel; Write-Host "downloaded $file from the latest GitHub release" }
+catch { $src = "$base/dl"; Write-Host "downloading $src/$file"; Invoke-WebRequest -Uri "$src/$file" -OutFile "$dest.tmp" -UseBasicParsing }
+$sums = (Invoke-WebRequest -Uri "$src/SHA256SUMS" -UseBasicParsing).Content
 $line = ($sums -split "`n") | Where-Object { $_ -match " $file$" }
 if ($line) {
   $want = ($line -split '\s+')[0]

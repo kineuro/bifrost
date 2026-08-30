@@ -14,9 +14,6 @@ jobs:
         with: { fetch-depth: 0 }   # tags, for the version
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - uses: actions/setup-go@v5
-        with: { go-version: '1.24', cache-dependency-path: cli/go.sum }
-
       - name: version
         id: v
         # the last tag, plus the commit when main has moved past it (e.g. 1.0.0 or 1.0.0+3.a1b2c3d)
@@ -29,17 +26,13 @@ jobs:
           (cd web && npm ci && npm run build)
           (cd server && npm ci && npm run build)
 
-      - name: build the CLI for every platform
-        working-directory: cli
-        env: { CGO_ENABLED: '0' }
+      - name: take the CLI binaries from the latest GitHub release (built by the release workflow)
+        env: { GH_TOKEN: ${{ github.token }} }
         run: |
-          mkdir -p ../bin
-          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
-            os=${t%/*}; arch=${t#*/}; out=../bin/bifrost-$os-$arch; [ $os = windows ] && out=$out.exe
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${{ steps.v.outputs.v }}" -o $out .
-          done
-          (cd ../bin && sha256sum bifrost-* > SHA256SUMS && echo "${{ steps.v.outputs.v }}" > VERSION && ls -la)
-
+          mkdir -p bin && cd bin
+          tag=$(gh release view --repo ${{ github.repository }} --json tagName -q .tagName)
+          gh release download "$tag" --repo ${{ github.repository }} --pattern 'bifrost-*' --pattern SHA256SUMS
+          echo "${tag#v}" > VERSION; chmod +x bifrost-*; ls -la
       - name: sync to the VM and restart (through the Warpgate gateway)
         env:
           KEY: ${{ secrets.DEPLOY_SSH_KEY }}

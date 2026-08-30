@@ -16,7 +16,7 @@ import Base from '../../layouts/Base.astro';
       <pre><code>curl -fsSL https://bifrost.kineuro.se/get | sh</code></pre>
       <p>Windows (PowerShell):</p>
       <pre><code>irm https://bifrost.kineuro.se/get.ps1 | iex</code></pre>
-      <p>Or download a binary from <a href="/dl/">the download list</a>: <code>bifrost-linux-amd64</code>, <code>bifrost-linux-arm64</code>, <code>bifrost-darwin-amd64</code>, <code>bifrost-darwin-arm64</code>, <code>bifrost-windows-amd64.exe</code>. Checksums are in <code>SHA256SUMS</code>.</p>
+      <p>Or download a binary from <a href="https://github.com/kineuro/bifrost/releases/latest">the latest GitHub release</a> (also mirrored on <a href="/dl/">this bridge</a>): <code>bifrost-linux-amd64</code>, <code>bifrost-linux-arm64</code>, <code>bifrost-darwin-amd64</code>, <code>bifrost-darwin-arm64</code>, <code>bifrost-windows-amd64.exe</code>. Checksums are in <code>SHA256SUMS</code>.</p>
       <div class="box">macOS may say the program is from an unidentified developer. The installer clears that flag; for a manual download run <code>xattr -d com.apple.quarantine bifrost</code> once.</div>
 
       <h2>Sign in</h2>
@@ -78,7 +78,7 @@ bifrost pull ./sub --from release_2026/derivatives   # only one folder</code></p
       <h2>Keeping it current</h2>
       <pre><code>bifrost version                  # what you have
 bifrost update                   # fetch and install the newest build, in place</code></pre>
-      <p><code>update</code> asks the bridge which version it serves, downloads the binary for your system and replaces itself; no installer, no administrator rights beyond writing its own file. If you are already current it says so. The tool and the bridge are released together, so run <code>update</code> when a transfer reports an error you do not expect or when the group asks you to. On Windows the previous binary is kept as <code>bifrost.exe.old</code> until the next update.</p>
+      <p><code>update</code> looks up the latest GitHub release (or asks the bridge if GitHub is unreachable), downloads the binary for your system and replaces itself; no installer, no administrator rights beyond writing its own file. If you are already current it says so. The tool and the bridge are released together, so run <code>update</code> when a transfer reports an error you do not expect or when the group asks you to. On Windows the previous binary is kept as <code>bifrost.exe.old</code> until the next update.</p>
 
       <h2>Scheduled or scripted transfers</h2>
       <pre><code>export BIFROST_TOKEN=bfr_…

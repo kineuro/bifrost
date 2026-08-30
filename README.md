@@ -36,7 +36,7 @@ curl http://127.0.0.1:8080/api/health
 
 Create a bridge and its first token through the admin API (`X-Bifrost-Admin: <ADMIN_KEY>`); the reference deployment does this from a staff portal, and `server/src/api/admin.ts` documents every call. Keep `/admin` off the public proxy. Point `ALERTMANAGER_URL` at an Alertmanager to get a notice per completed transfer.
 
-The CLI binaries are built by the workflow into `bin/` and served by the server at `/dl/`, with an installer at `/get` and `/get.ps1`; `bifrost update` fetches whatever the server serves. To build locally: `cd cli && go build -o bifrost .`
+The CLI binaries are built by the release workflow and attached to each GitHub release; the installers (`/get`, `/get.ps1`) and `bifrost update` fetch from the latest release, with the server's `/dl/` mirror as fallback. The deploy takes the same release binaries into `bin/`. To build locally: `cd cli && go build -o bifrost .`
 
 ## Versions and releases
 
