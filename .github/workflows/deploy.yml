@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }   # tags, for the version
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - uses: actions/setup-go@v5
@@ -18,7 +19,10 @@ jobs:
 
       - name: version
         id: v
-        run: echo "v=$(date -u +%Y.%m.%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        # the last tag, plus the commit when main has moved past it (e.g. 1.0.0 or 1.0.0+3.a1b2c3d)
+        run: |
+          t=$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0); n=$(git rev-list ${t}..HEAD --count 2>/dev/null || echo 0)
+          v=${t#v}; [ "$n" != 0 ] && v="$v+$n.${GITHUB_SHA::7}"; echo "v=$v" >> "$GITHUB_OUTPUT"
 
       - name: build the server once here, so a broken commit never reaches the VM
         run: |

@@ -38,6 +38,10 @@ Create a bridge and its first token through the admin API (`X-Bifrost-Admin: <AD
 
 The CLI binaries are built by the workflow into `bin/` and served by the server at `/dl/`, with an installer at `/get` and `/get.ps1`; `bifrost update` fetches whatever the server serves. To build locally: `cd cli && go build -o bifrost .`
 
+## Versions and releases
+
+One version for server, page and CLI, as a git tag `vX.Y.Z` (semantic versioning). Each tag builds a GitHub release with the CLI binaries, their checksums and the release notes taken from [CHANGELOG.md](CHANGELOG.md); the deployed service reports the same version at `/api/health` and `bifrost version`, with `+N.sha` appended when the host runs commits past the last tag.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerability.

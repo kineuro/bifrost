@@ -1,0 +1,39 @@
+name: release
+# On a version tag: build the CLI for every platform and publish a GitHub release with the binaries,
+# their checksums and the matching section of CHANGELOG.md as the release notes.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.24', cache-dependency-path: cli/go.sum }
+      - name: build the CLI
+        working-directory: cli
+        env: { CGO_ENABLED: '0' }
+        run: |
+          v=${GITHUB_REF_NAME#v}; mkdir -p ../bin
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os=${t%/*}; arch=${t#*/}; out=../bin/bifrost-$os-$arch; [ $os = windows ] && out=$out.exe
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$v" -o $out .
+          done
+          (cd ../bin && sha256sum bifrost-* > SHA256SUMS && echo "$v" > VERSION)
+      - name: release notes from the changelog
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          awk -v v="$v" '/^## \[/{p = index($0, "[" v "]") > 0} p' CHANGELOG.md | sed '1d' > notes.md
+          [ -s notes.md ] || echo "Release $v" > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Bifrost ${{ github.ref_name }}
+          body_path: notes.md
+          files: |
+            bin/bifrost-*
+            bin/SHA256SUMS
