@@ -1,10 +1,51 @@
+<p align="center"><img src="web/public/favicon.svg" width="72" alt="Bifrost"></p>
+
 # Bifrost
 
-The data bridge of Experimental Neuroradiology Research at Karolinska Institutet: a secure way to receive data from partners and to give data to them, over one HTTPS name, with tokens that carry direction, quota, expiry and limits.
+A data bridge between a research group and its partners: one link per collaboration, with a direction (send, receive or both), a space limit, a closing date and checksums on every file. Partners use it in the browser (resumable drag-and-drop uploads with tus) or with a small command line tool that moves terabytes and hundreds of thousands of files with parallel streams and resumes after any interruption. Administrators run it from their own portal through a small admin API. No accounts for partners, no SFTP, nothing to install for the browser path.
 
-- `server/`: Node 22 + Hono + SQLite. Collaborator API (`/api`), admin API for the staff portal (`/admin`), tus endpoint for browser uploads, Prometheus metrics, CLI distribution (`/get`, `/dl`).
-- `web/`: the collaborator page and the documentation (Astro, static, built into `server/public`).
-- `cli/`: the `bifrost` command (Go, static binaries for Linux, macOS, Windows).
-- Runs as one container on the `bifrost` VM on Asgard; data lives on Midgard's `tank/exchange`, mounted at `/exchange` (`in/<bridge>`, `out/<bridge>`, `.bifrost/` state).
+Built and run by [Experimental Neuroradiology Research at Karolinska Institutet](https://kineuro.se) (kineuro), where it carries imaging studies between hospital sites and the research platform. Live documentation, as partners see it: [how to use it](https://bifrost.kineuro.se/docs/) and [the command line](https://bifrost.kineuro.se/docs/cli/).
 
-Deploy: push to `main`. The workflow builds the site, the server and the CLI for every platform, then syncs to the VM through the gateway and restarts the container. Administration happens in the staff portal at `kineuro.se/portal/bifrost/`; procedures are in the administrator SOP.
+## What is in the repository
+
+| Directory | What | Stack |
+|---|---|---|
+| `server/` | The service: partner API (`/api`), tus endpoint for the browser, admin API (`/admin`), Prometheus metrics, CLI distribution (`/get`, `/dl`) | Node 22, Hono, SQLite (better-sqlite3), @tus/server, tar-stream, zstd from node:zlib |
+| `web/` | The partner page and the documentation, built as static files into `server/public` | Astro |
+| `cli/` | `bifrost`: `login`, `push`, `pull`, `ls`, `status`, `verify`, `update` | Go, no dependencies beyond klauspost/compress |
+| `compose.yaml`, `Dockerfile` | One container; data on a bind-mounted exchange directory | Docker |
+| `.github/workflows/deploy.yml` | Build site, server and CLI binaries for six platforms, sync to the host, restart | GitHub Actions |
+
+## How a transfer works
+
+- **Plan first.** The client indexes the folder and asks the server which files it already has (by path and size, or hash with `--checksum`). Only the rest is sent, so a rerun is a resume.
+- **Two lanes.** Files above 64 MB go as 32 MB parts, several in flight, each part hashed and checked on arrival, then the whole file is hashed again before it is placed. Smaller files are packed into tar batches of about 256 MB or 5,000 files, zstd-compressed on the fly, and unpacked and hashed on the server, so a DICOM study is a few hundred requests instead of a few hundred thousand.
+- **Budget.** The server caps concurrent streams globally and per client and answers `503 Retry-After` when busy; the CLI waits and continues.
+- **State on the server.** Received files and in-progress parts are recorded in SQLite, so a resume needs no local state and works from another machine.
+- **Downloads** mirror it: HTTP Range for large files, tar batches for small ones, zip on the fly for the browser.
+
+## Running it yourself
+
+You need a host with Docker, a directory (ideally its own dataset with snapshots) for the exchange, and a reverse proxy that terminates TLS for one name and forwards to port 8080. Traefik users: set no request read/write timeout on that entry point; transfers run for hours.
+
+```
+cp .env.example .env         # SECRET, ADMIN_KEY (random strings), optional ALERTMANAGER_URL
+docker compose up -d --build
+curl http://127.0.0.1:8080/api/health
+```
+
+Create a bridge and its first token through the admin API (`X-Bifrost-Admin: <ADMIN_KEY>`); the reference deployment does this from a staff portal, and `server/src/api/admin.ts` documents every call. Keep `/admin` off the public proxy. Point `ALERTMANAGER_URL` at an Alertmanager to get a notice per completed transfer.
+
+The CLI binaries are built by the workflow into `bin/` and served by the server at `/dl/`, with an installer at `/get` and `/get.ps1`; `bifrost update` fetches whatever the server serves. To build locally: `cd cli && go build -o bifrost .`
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerability.
+
+## Name and mark
+
+Bifrost is the bridge between worlds in Norse mythology; our machines are Asgard (compute) and Midgard (storage). The mark is a plum square with the bridge drawn in one line.
+
+## License
+
+MIT. Contributions are welcome; open an issue first for anything larger than a fix.

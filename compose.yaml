@@ -1,4 +1,4 @@
-# Runs on the bifrost VM (10.200.0.50) from /srv/bifrost; the edge proxies bifrost.kineuro.se to :8080.
+# Runs on the Bifrost VM from /srv/bifrost; the edge proxies bifrost.kineuro.se to :8080.
 # The exchange dataset from Midgard is mounted on the VM at /exchange; the container sees only that.
 services:
   bifrost:
@@ -8,11 +8,10 @@ services:
     user: "1600:1600"
     ports:
       - "8080:8080"
-    env_file: .env          # SECRET, ADMIN_KEY
+    env_file: .env          # SECRET, ADMIN_KEY, ALERTMANAGER_URL (never committed)
     environment:
       PUBLIC_URL: https://bifrost.kineuro.se
       EXCHANGE_ROOT: /exchange
-      ALERTMANAGER_URL: http://10.200.0.4:9093
       BIFROST_VERSION: ${BIFROST_VERSION:-dev}
       BIN_DIR: /app/server/bin
     volumes:
