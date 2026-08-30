@@ -37,9 +37,6 @@ app.onError((err, c) => {
 
 app.get('/api/health', (c) => c.json({ ok: true, version: config.version, exchange: fs.existsSync(config.inRoot) }));
 app.get('/metrics', (c) => c.text(render(), 200, { 'content-type': 'text/plain; version=0.0.4' }));
-app.route('/api', pub);
-app.route('/admin', admin);
-
 // CLI distribution: the binaries are built by CI into bin/, served here with an install script.
 app.get('/api/cli', async (c) => {
   const files = (await fsp.readdir(binDir).catch(() => [] as string[])).filter((f) => f.startsWith('bifrost-'));
@@ -57,6 +54,9 @@ app.get('/dl/:file', async (c) => {
   c.header('Content-Disposition', `attachment; filename="${f}"`);
   return c.body(fs.createReadStream(p) as any);
 });
+app.route('/api', pub);
+app.route('/admin', admin);
+
 app.get('/get', async (c) => c.text(await fsp.readFile(path.join(publicDir, 'get.sh'), 'utf8'), 200, { 'content-type': 'text/x-shellscript' }));
 app.get('/get.ps1', async (c) => c.text(await fsp.readFile(path.join(publicDir, 'get.ps1'), 'utf8'), 200, { 'content-type': 'text/plain' }));
 
