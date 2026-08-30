@@ -26,13 +26,13 @@ import (
 // ---- options -------------------------------------------------------------------------------------------------------------
 
 type opts struct {
-	to, from  string
-	workers   int
-	limit     int64
-	excludes  []string
-	checksum  bool
-	dryRun    bool
-	jsonOut   bool
+	to, from   string
+	workers    int
+	limit      int64
+	excludes   []string
+	checksum   bool
+	dryRun     bool
+	jsonOut    bool
 	positional []string
 }
 
@@ -365,8 +365,8 @@ func (x *limitedReader) Read(b []byte) (int, error) {
 // ---- push ----------------------------------------------------------------------------------------------------------------
 
 type planResp struct {
-	Have      []string `json:"have"`
-	Missing   []struct {
+	Have    []string `json:"have"`
+	Missing []struct {
 		Path string `json:"path"`
 		Size int64  `json:"size"`
 	} `json:"missing"`
@@ -1229,8 +1229,70 @@ func cmdLogin(args []string) error {
 	if err := saveConfig(cfg); err != nil {
 		return err
 	}
-	fmt.Printf("bridge \"%s\" opened for %s. %s\nsaved in %s\n", sr.Share.Name, orDefault(sr.Share.Partner, "you"), describe(sr.Share), configPath())
+	printBridge(sr.Share, sr.Credential.Label, cfg.URL)
+	fmt.Printf("\ntoken saved in %s. Next: bifrost push <folder>  or  bifrost pull <folder>\n", configPath())
 	return nil
+}
+
+// printBridge shows what this token opens: name, partner, what it allows, limits, closing date, message.
+func printBridge(s Share, label, url string) {
+	line := strings.Repeat("─", 64)
+	fmt.Println(line)
+	fmt.Printf("  %s\n", s.Name)
+	if s.Partner != "" {
+		fmt.Printf("  for %s", s.Partner)
+		if label != "" {
+			fmt.Printf(" (token: %s)", label)
+		}
+		fmt.Println()
+	} else if label != "" {
+		fmt.Printf("  token: %s\n", label)
+	}
+	fmt.Println(line)
+	switch s.Direction {
+	case "both":
+		fmt.Println("  you can        send files to the group and download files prepared for you")
+	case "in":
+		fmt.Println("  you can        send files to the group (no download)")
+	default:
+		fmt.Println("  you can        download the files prepared for you (no upload)")
+	}
+	st := s.Status
+	if st == "open" && s.ExpiresAt != nil {
+		if t, err := time.Parse(time.RFC3339, *s.ExpiresAt); err == nil {
+			d := int(time.Until(t).Hours() / 24)
+			if d < 0 {
+				st = "expired"
+			} else {
+				st = fmt.Sprintf("open, closes %s (%d days left)", (*s.ExpiresAt)[:10], d)
+			}
+		}
+	} else if st == "open" {
+		st = "open, no closing date"
+	}
+	fmt.Printf("  status         %s\n", st)
+	if s.Direction != "out" {
+		q := "no limit"
+		if s.QuotaBytes > 0 {
+			q = fmt.Sprintf("%s of %s used", fmtBytes(s.UsedBytes), fmtBytes(s.QuotaBytes))
+		} else if s.UsedBytes > 0 {
+			q = fmt.Sprintf("%s used, no limit", fmtBytes(s.UsedBytes))
+		}
+		fmt.Printf("  space          %s\n", q)
+		if s.MaxFiles > 0 {
+			fmt.Printf("  files          %d of %d\n", s.Files, s.MaxFiles)
+		} else if s.Files > 0 {
+			fmt.Printf("  files          %d received so far\n", s.Files)
+		}
+	}
+	if s.Direction != "in" && s.MaxDownloadBytes > 0 {
+		fmt.Printf("  download       %s of %s allowance used\n", fmtBytes(s.DownloadedBytes), fmtBytes(s.MaxDownloadBytes))
+	}
+	if s.Message != "" {
+		fmt.Printf("  message        %s\n", s.Message)
+	}
+	fmt.Printf("  bridge         %s (%s)\n", url, s.ID)
+	fmt.Println(line)
 }
 func cmdLogout() error { os.Remove(configPath()); fmt.Println("token forgotten"); return nil }
 
@@ -1268,29 +1330,8 @@ func cmdStatus() error {
 	if err != nil {
 		return err
 	}
-	s := sr.Share
-	fmt.Printf("bridge:     %s (%s)\n", s.Name, s.ID)
-	if s.Partner != "" {
-		fmt.Printf("partner:    %s\n", s.Partner)
-	}
-	fmt.Printf("direction:  %s\nstatus:     %s\n", s.Direction, s.Status)
-	if s.ExpiresAt != nil {
-		fmt.Printf("closes:     %s\n", (*s.ExpiresAt)[:10])
-	}
-	if s.Direction != "out" {
-		q := "no limit"
-		if s.QuotaBytes > 0 {
-			q = fmtBytes(s.QuotaBytes)
-		}
-		fmt.Printf("received:   %d files, %s (quota %s)\n", s.Files, fmtBytes(s.UsedBytes), q)
-	}
-	if s.Direction != "in" {
-		fmt.Printf("downloaded: %s\n", fmtBytes(s.DownloadedBytes))
-	}
-	if s.Message != "" {
-		fmt.Printf("message:    %s\n", s.Message)
-	}
-	fmt.Printf("server:     %s (parts %s, batches up to %s or %d files, %d streams)\n", c.cfg.URL, fmtBytes(s.Limits.PartSize), fmtBytes(s.Limits.BatchBytes), s.Limits.BatchFiles, s.Limits.Streams)
+	printBridge(sr.Share, sr.Credential.Label, c.cfg.URL)
+	fmt.Printf("  transfer       parts of %s for large files, batches up to %s or %d files, %d parallel streams\n", fmtBytes(sr.Share.Limits.PartSize), fmtBytes(sr.Share.Limits.BatchBytes), sr.Share.Limits.BatchFiles, sr.Share.Limits.Streams)
 	return nil
 }
 
