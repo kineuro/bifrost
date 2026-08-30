@@ -7,8 +7,8 @@ import Base from '../layouts/Base.astro';
     <div class="wrap" style="display:grid;grid-template-columns:1.1fr 1fr;gap:48px;align-items:start">
       <div style="display:flex;flex-direction:column;gap:14px">
         <p class="eyebrow">Bifrost</p>
-        <h1>A bridge for your data, opened by the group for you.</h1>
-        <p class="lede">You were given a link or a token by the Karolinska Institutet Neuro Research Group. It opens one bridge: a place where you send us files, download the files we prepared for you, or both. Nothing to install; your browser is enough. For terabytes or thousands of files, the <a href="/docs/cli/">command line tool</a> is faster and resumes on its own.</p>
+        <h1>A bridge for your data, opened for you by kineuro.</h1>
+        <p class="lede">You were given a link or a token by Experimental Neuroradiology Research at Karolinska Institutet (kineuro). It opens one bridge: a place where you send us files, download the files we prepared for you, or both. Nothing to install; your browser is enough. For terabytes or thousands of files, the <a href="/docs/cli/">command line tool</a> is faster and resumes on its own.</p>
       </div>
       <form class="card" id="loginForm" style="gap:14px">
         <label><span class="eyebrow">Token</span><input type="password" id="token" autocomplete="off" spellcheck="false" placeholder="bfr_…" /></label>
@@ -115,7 +115,7 @@ import Base from '../layouts/Base.astro';
     $('bName').textContent = s.name;
     $('bMessage').textContent = s.message; $('bMessage').hidden = !s.message;
     const meta: string[] = [];
-    meta.push(s.direction === 'both' ? 'You can send and receive.' : s.direction === 'in' ? 'You can send files to the group.' : 'You can download the files prepared for you.');
+    meta.push(s.direction === 'both' ? 'You can send and receive.' : s.direction === 'in' ? 'You can send files to kineuro.' : 'You can download the files prepared for you.');
     if (s.expires_at) meta.push(`The bridge closes on ${new Date(s.expires_at).toLocaleDateString(undefined, { dateStyle: 'long' })}.`);
     $('bMeta').textContent = meta.join(' ');
     $('bCred').textContent = c.label ? `Signed in as ${c.label}` : '';

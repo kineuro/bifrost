@@ -26,7 +26,7 @@ import Base from '../../layouts/Base.astro';
   MS cohort from Uppsala
   for Uppsala University, Dr Lind (token: Dr Lind)
 ────────────────────────────────────────────────────────────────
-  you can        send files to the group (no download)
+  you can        send files to kineuro (no download)
   status         open, closes 2026-12-31 (122 days left)
   space          0 B of 2.0 TB used
   message        Please send the T1 and FLAIR series, anonymised.
@@ -37,7 +37,7 @@ import Base from '../../layouts/Base.astro';
 
       <h2>Send a folder</h2>
       <pre><code>bifrost push /data/study_2026</code></pre>
-      <p>This indexes the folder, asks the bridge which files it already has, then sends the rest. On the bridge the data lands under a folder with the same name (<code>study_2026/</code>); use <code>--to</code> to choose another name. When it finishes, every file has been verified by checksum and the group is notified.</p>
+      <p>This indexes the folder, asks the bridge which files it already has, then sends the rest. On the bridge the data lands under a folder with the same name (<code>study_2026/</code>); use <code>--to</code> to choose another name. When it finishes, every file has been verified by checksum and we are notified.</p>
       <p>What you see while it runs:</p>
       <pre><code>306475 files indexed; 0 already on the bridge; 306475 to send (1.9 TB); 6 streams
  37.2%  707.1 GB of 1.9 TB  114020/306475 files  312.4 MB/s  eta 1h04m</code></pre>
@@ -86,7 +86,7 @@ bifrost push /export/nightly --to nightly --json >> bifrost.log || echo "some fi
       <p>A nightly job that re-runs the same push is safe: unchanged files are skipped, new or changed files are sent, and the exit code tells you whether to look at the log.</p>
 
       <h2>Where does the data go?</h2>
-      <p>Into an isolated exchange area on the group's storage server, one folder per bridge, reachable only by this service and the group's administrators. Nothing you send is mixed with anything else until an administrator reviews and accepts it into a study. Problems or questions: <a href="mailto:admin@kineuro.se">admin@kineuro.se</a>.</p>
+      <p>Into an isolated exchange area on our storage server, one folder per bridge, reachable only by this service and our administrators. Nothing you send is mixed with anything else until an administrator reviews and accepts it into a study. Problems or questions: <a href="mailto:admin@kineuro.se">admin@kineuro.se</a>.</p>
     </div>
   </section>
 </Base>

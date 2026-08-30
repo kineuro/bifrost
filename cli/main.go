@@ -1,8 +1,8 @@
-// bifrost: the command line client of the group's data bridge.
+// bifrost: the command line client of kineuro's data bridge.
 //
 //	bifrost login <token>            remember a bridge token (or set BIFROST_TOKEN)
 //	bifrost push <folder or file>    send data over the bridge (parallel, resumable, verified)
-//	bifrost pull <folder>            fetch what the group prepared for you (parallel, resumable, verified)
+//	bifrost pull <folder>            fetch what kineuro prepared for you (parallel, resumable, verified)
 //	bifrost ls [path]                list files on the bridge
 //	bifrost status                   what this bridge allows, and how much has been used
 //	bifrost verify <folder>          compare a local folder with what the bridge holds
@@ -68,7 +68,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Print(`bifrost ` + version + `: the data bridge of the Karolinska Institutet Neuro Research Group
+	fmt.Print(`bifrost ` + version + `: the data bridge of Experimental Neuroradiology Research at Karolinska Institutet
 
 Usage:
   bifrost login <token>                 remember your bridge token (asks for the passcode if the bridge has one)

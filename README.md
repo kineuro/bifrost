@@ -1,6 +1,6 @@
 # Bifrost
 
-The data bridge of the Karolinska Institutet Neuro Research Group: a secure way to receive data from partners and to give data to them, over one HTTPS name, with tokens that carry direction, quota, expiry and limits.
+The data bridge of Experimental Neuroradiology Research at Karolinska Institutet: a secure way to receive data from partners and to give data to them, over one HTTPS name, with tokens that carry direction, quota, expiry and limits.
 
 - `server/`: Node 22 + Hono + SQLite. Collaborator API (`/api`), admin API for the staff portal (`/admin`), tus endpoint for browser uploads, Prometheus metrics, CLI distribution (`/get`, `/dl`).
 - `web/`: the collaborator page and the documentation (Astro, static, built into `server/public`).

@@ -6,13 +6,13 @@ import Base from '../../layouts/Base.astro';
     <div class="wrap" style="display:flex;flex-direction:column;gap:12px">
       <p class="eyebrow">How to use it</p>
       <h1>Sending and receiving data over Bifrost</h1>
-      <p class="lede">Bifrost is the bridge the Karolinska Institutet Neuro Research Group opens when data has to travel between us and a partner. Each bridge is private to one collaboration: it has its own token, its own space, its own closing date. This page explains the browser. The <a href="/docs/cli/">command line tool</a> does the same job for large transfers.</p>
+      <p class="lede">Bifrost is the bridge that kineuro, Experimental Neuroradiology Research at Karolinska Institutet, opens when data has to travel between us and a partner. Each bridge is private to one collaboration: it has its own token, its own space, its own closing date. This page explains the browser. The <a href="/docs/cli/">command line tool</a> does the same job for large transfers.</p>
     </div>
   </section>
   <section class="band last">
     <div class="wrap prose">
       <h2>What you were given</h2>
-      <p>Someone in the group sent you either a <strong>link</strong> (it ends in <code>#bfr_…</code>) or a <strong>token</strong> (a string starting with <code>bfr_</code>). Both are the same key. Treat it like a password: it is the only thing that opens your bridge. Some bridges also have a <strong>passcode</strong>, sent separately; you will be asked for it after the token.</p>
+      <p>Someone at kineuro sent you either a <strong>link</strong> (it ends in <code>#bfr_…</code>) or a <strong>token</strong> (a string starting with <code>bfr_</code>). Both are the same key. Treat it like a password: it is the only thing that opens your bridge. Some bridges also have a <strong>passcode</strong>, sent separately; you will be asked for it after the token.</p>
       <div class="box">A bridge can receive files from you, give files to you, or both. What yours does is written at the top of the page once you open it, together with the date it closes and, if there is one, the amount of space you may use.</div>
 
       <h2>Opening the bridge</h2>
@@ -21,9 +21,9 @@ import Base from '../../layouts/Base.astro';
         <li>Enter the passcode if asked.</li>
         <li>You are on your bridge. Two tabs may appear: <strong>Files for you</strong> and <strong>Send files</strong>.</li>
       </ol>
-      <p>The browser remembers you for twelve hours. <em>Close</em> in the top right ends the session; the token itself keeps working until the group revokes it or the bridge closes.</p>
+      <p>The browser remembers you for twelve hours. <em>Close</em> in the top right ends the session; the token itself keeps working until we revoke it or the bridge closes.</p>
 
-      <h2>Sending files to the group</h2>
+      <h2>Sending files to us</h2>
       <ol>
         <li>Open the <strong>Send files</strong> tab.</li>
         <li>Drag files or whole folders onto the dashed area, or use <em>Choose files</em> / <em>Choose a folder</em>. Folder structure is kept exactly as it is on your computer.</li>
@@ -34,7 +34,7 @@ import Base from '../../layouts/Base.astro';
       <p>Under <strong>Already received</strong> you see the names and sizes of what has arrived. For your protection you cannot download from there: a bridge that receives is a one-way door.</p>
       <p>Hidden files (names starting with a dot, such as <code>.DS_Store</code>) are skipped automatically. There is no size limit per file. If the bridge has a space limit it is shown as a bar at the top; an upload that would exceed it is refused with a clear message.</p>
 
-      <h2>Downloading files from the group</h2>
+      <h2>Downloading files from us</h2>
       <ol>
         <li>Open the <strong>Files for you</strong> tab.</li>
         <li>Click a folder to enter it, the path above the list to go back.</li>
@@ -44,13 +44,13 @@ import Base from '../../layouts/Base.astro';
       <div class="box">For terabytes or for tens of thousands of files (a DICOM study, for instance) use the <a href="/docs/cli/">command line tool</a>: it runs several streams in parallel, resumes from any interruption without a browser tab, and verifies every file.</div>
 
       <h2>When the bridge closes</h2>
-      <p>On the closing date the bridge stops accepting transfers. What you sent stays with the group; what was prepared for you is no longer downloadable. If you need more time, ask your contact in the group: a bridge can be extended in a minute.</p>
+      <p>On the closing date the bridge stops accepting transfers. What you sent stays with us; what was prepared for you is no longer downloadable. If you need more time, ask your contact at kineuro: a bridge can be extended in a minute.</p>
 
       <h2>Security, briefly</h2>
       <ul>
-        <li>Everything travels over HTTPS to <code>bifrost.kineuro.se</code>; the machine behind it can only see its own exchange area, never the group's archives.</li>
-        <li>Your token is stored on our side only as a salted hash. If you lose it, the group issues a new one and revokes the old.</li>
-        <li>Every transfer is checked byte for byte and written to an audit log that the group can read.</li>
+        <li>Everything travels over HTTPS to <code>bifrost.kineuro.se</code>; the machine behind it can only see its own exchange area, never our archives.</li>
+        <li>Your token is stored on our side only as a salted hash. If you lose it, we issue a new one and revoke the old.</li>
+        <li>Every transfer is checked byte for byte and written to an audit log that we can read.</li>
         <li>The bridge can be restricted to your organisation's network addresses; ask if you want that.</li>
       </ul>
       <p>Questions or problems: <a href="mailto:admin@kineuro.se">admin@kineuro.se</a>.</p>

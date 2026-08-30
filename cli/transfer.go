@@ -1251,9 +1251,9 @@ func printBridge(s Share, label, url string) {
 	fmt.Println(line)
 	switch s.Direction {
 	case "both":
-		fmt.Println("  you can        send files to the group and download files prepared for you")
+		fmt.Println("  you can        send files to kineuro and download files prepared for you")
 	case "in":
-		fmt.Println("  you can        send files to the group (no download)")
+		fmt.Println("  you can        send files to kineuro (no download)")
 	default:
 		fmt.Println("  you can        download the files prepared for you (no upload)")
 	}

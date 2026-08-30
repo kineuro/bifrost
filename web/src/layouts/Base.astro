@@ -1,7 +1,7 @@
 ---
 import '../styles/global.css';
 interface Props { title: string; description?: string }
-const { title, description = 'Bifrost: the Karolinska Institutet Neuro Research Group’s bridge for exchanging data with partners.' } = Astro.props;
+const { title, description = 'Bifrost: the data bridge of Experimental Neuroradiology Research at Karolinska Institutet.' } = Astro.props;
 ---
 <!doctype html>
 <html lang="en">
@@ -16,11 +16,11 @@ const { title, description = 'Bifrost: the Karolinska Institutet Neuro Research 
   <body>
     <header class="top">
       <div class="wrap">
-        <a class="brand" href="/"><img src="/kineuro-mark.svg" alt="" width="26" height="26" /><span><span class="name">Bifrost</span><br /><span class="sub">Karolinska Institutet Neuro Research Group · data bridge</span></span></a>
+        <a class="brand" href="/"><img src="/kineuro-mark.svg" alt="" width="26" height="26" /><span><span class="name">Bifrost</span><br /><span class="sub">Experimental Neuroradiology Research at Karolinska Institutet · data bridge</span></span></a>
         <nav class="top"><a href="/">Your bridge</a><a href="/docs/">How to use it</a><a href="/docs/cli/">Command line</a><a href="https://kineuro.se">kineuro.se</a></nav>
       </div>
     </header>
     <main><slot /></main>
-    <footer><div class="wrap"><span>Bifrost is run by the Karolinska Institutet Neuro Research Group. Every transfer is checked byte for byte and recorded.</span><span>Questions: <a href="mailto:admin@kineuro.se">admin@kineuro.se</a></span></div></footer>
+    <footer><div class="wrap"><span>Bifrost is run by Experimental Neuroradiology Research at Karolinska Institutet. Every transfer is checked byte for byte and recorded.</span><span>Questions: <a href="mailto:admin@kineuro.se">admin@kineuro.se</a></span></div></footer>
   </body>
 </html>
