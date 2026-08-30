@@ -6,8 +6,11 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-30
+
 ### Changed
 - Installers and `bifrost update` fetch the CLI from the latest GitHub release, with the bridge's `/dl/` as fallback; the deploy takes the release binaries instead of building its own.
+- `bifrost update` no longer replaces a release build with whatever the bridge serves; a `+N.sha` server version counts as current.
 
 ## [1.0.0] - 2026-08-30
 
@@ -26,5 +29,6 @@ First release, in production at bifrost.kineuro.se.
 - The reverse proxy in front must not impose a request read timeout (Traefik v3 defaults to 60 s); transfers run for hours.
 - `/admin` must never be routed publicly.
 
-[Unreleased]: https://github.com/kineuro/bifrost/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/kineuro/bifrost/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/kineuro/bifrost/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/kineuro/bifrost/releases/tag/v1.0.0
