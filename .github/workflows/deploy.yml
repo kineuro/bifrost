@@ -27,7 +27,8 @@ jobs:
           (cd server && npm ci && npm run build)
 
       - name: take the CLI binaries from the latest GitHub release (built by the release workflow)
-        env: { GH_TOKEN: ${{ github.token }} }
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p bin && cd bin
           tag=$(gh release view --repo ${{ github.repository }} --json tagName -q .tagName)
