@@ -418,7 +418,21 @@ func cmdPush(ctx context.Context, args []string) error {
 		}
 	}
 	prefix = strings.Trim(strings.ReplaceAll(prefix, "\\", "/"), "/")
+	// Mirror the server's cleanPath: backslashes become separators, empty and "." segments drop out.
+	// A name like `DICOM\I0` (written on Windows) lands as DICOM/I0 on both ends, so the plan
+	// response keys match ours.
+	cleanRel := func(rel string) string {
+		parts := strings.Split(strings.ReplaceAll(rel, "\\", "/"), "/")
+		out := parts[:0]
+		for _, s := range parts {
+			if s != "" && s != "." {
+				out = append(out, s)
+			}
+		}
+		return strings.Join(out, "/")
+	}
 	remote := func(rel string) string {
+		rel = cleanRel(rel)
 		if prefix == "" {
 			return rel
 		}
@@ -459,10 +473,16 @@ func cmdPush(ctx context.Context, args []string) error {
 			return fmt.Errorf("plan: %w", err)
 		}
 		for _, h := range pr.Have {
-			haveBytes += byRemote[h].size
+			if f := byRemote[h]; f != nil {
+				haveBytes += f.size
+			}
 		}
 		for _, m := range pr.Missing {
-			missing = append(missing, byRemote[m.Path])
+			if f := byRemote[m.Path]; f != nil {
+				missing = append(missing, f)
+			} else {
+				prog.warn("plan returned a path we did not send: " + m.Path)
+			}
 		}
 		for _, r := range pr.Resumable {
 			resumable[r.Path] = struct {
