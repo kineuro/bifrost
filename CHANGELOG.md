@@ -6,8 +6,13 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-09-01
+
 ### Added
 - Dark theme (follows the system, with a light/dark toggle in the header) on the partner page and the docs.
+
+### Fixed
+- `bifrost push` crashed on files whose names contain a backslash (or a `.`/empty path segment): the server normalises such paths, so its planning response no longer matched the client's records. The CLI now applies the same normalisation — a file named `DICOM\I0` arrives as `DICOM/I0` — and an unrecognised path in the response is reported instead of crashing.
 
 ## [1.0.1] - 2026-08-30
 
@@ -32,6 +37,7 @@ First release, in production at bifrost.kineuro.se.
 - The reverse proxy in front must not impose a request read timeout (Traefik v3 defaults to 60 s); transfers run for hours.
 - `/admin` must never be routed publicly.
 
-[Unreleased]: https://github.com/kineuro/bifrost/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/kineuro/bifrost/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/kineuro/bifrost/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/kineuro/bifrost/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/kineuro/bifrost/releases/tag/v1.0.0
