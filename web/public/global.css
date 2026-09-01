@@ -48,13 +48,13 @@ pre code { background: none; padding: 0; }
 input[type=text], input[type=password], input[type=search] { font: inherit; padding: 11px 12px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink); width: 100%; }
 input:focus { outline: 2px solid var(--plum); outline-offset: 1px; border-color: var(--plum); }
 header.top { border-bottom: 1px solid var(--rule); background: var(--ground); }
-header.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-top: 18px; padding-bottom: 18px; }
+header.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 14px 20px; padding-top: 18px; padding-bottom: 18px; flex-wrap: wrap; }
 .brand { display: flex; align-items: center; gap: 12px; color: var(--ink); }
 .brand img { width: 26px; height: 26px; display: block; }
 .brand .name { font-family: var(--serif); font-size: 22px; }
 .brand .sub { font-size: 12px; color: var(--muted); }
-nav.top { display: flex; gap: 22px; font-size: 14px; font-weight: 500; }
-nav.top a { color: var(--ink); }
+nav.top { display: flex; gap: 12px 22px; font-size: 14px; font-weight: 500; flex-wrap: wrap; align-items: center; }
+nav.top a { color: var(--ink); white-space: nowrap; }
 .theme { border: none; background: none; cursor: pointer; padding: 4px; color: var(--muted); display: inline-flex; align-items: center; line-height: 0; }
 .theme:hover { color: var(--link); }
 .theme svg { display: none; }
@@ -92,4 +92,31 @@ footer .wrap { display: flex; justify-content: space-between; gap: 20px; padding
 .prose th { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .prose .box { margin: 1.2rem 0; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.hero2 { display: grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: start; }
+
+/* Copy button on prose code blocks (added by the script in Base; the wrapper keeps it in place while the code scrolls) */
+.pre-wrap { position: relative; }
+.pre-wrap .copy-code { position: absolute; top: 8px; right: 8px; font: 600 11px/1 var(--sans); letter-spacing: 0.04em; padding: 5px 10px; border: 1px solid var(--rule); background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity 0.15s; }
+.pre-wrap:hover .copy-code, .copy-code:focus-visible, .copy-code.done { opacity: 1; }
+.copy-code:hover { color: var(--link); border-color: var(--link); }
+.copy-code.done { color: var(--ok); border-color: var(--ok); }
+@media (pointer: coarse) { .pre-wrap .copy-code { opacity: 1; } }
+
+/* Responsive DNA, as on kineuro.se: 900px stacks layouts, 700px adjusts density; wide things scroll in their own
+   box (grid cells carry min-width: 0), the page itself never scrolls sideways. */
+.grid2 > *, .hero2 > * { min-width: 0; }
+pre { overscroll-behavior-x: contain; }
+code { overflow-wrap: anywhere; } /* a long URL or path in inline code breaks instead of widening the page (inert inside pre, which never wraps) */
+@media (max-width: 900px) {
+  .hero2 { grid-template-columns: 1fr; gap: 32px; }
+}
 @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr auto; } .row .when { display: none; } }
+@media (max-width: 700px) {
+  .brand .sub { display: none; }
+  header.top .wrap { padding-top: 14px; padding-bottom: 14px; }
+  nav.top { gap: 12px 14px; font-size: 13.5px; width: 100%; justify-content: space-between; }
+  nav.top .theme { margin-left: auto; }
+  .prose { font-size: 1rem; }
+  .prose table { display: block; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  pre { padding: 0.8rem 0.9rem; }
+}

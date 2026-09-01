@@ -1,5 +1,6 @@
 ---
-import '../styles/global.css';
+// One stylesheet for everything: the Astro pages here and the pages the server renders itself
+// (/dl/) all link /global.css from public/, so there is no second copy to drift.
 interface Props { title: string; description?: string }
 const { title, description = 'Bifrost: the data bridge of Experimental Neuroradiology Research at Karolinska Institutet.' } = Astro.props;
 ---
@@ -11,6 +12,7 @@ const { title, description = 'Bifrost: the data bridge of Experimental Neuroradi
     <meta name="robots" content="noindex" />
     <title>{title} · Bifrost</title>
     <meta name="description" content={description} />
+    <link rel="stylesheet" href="/global.css" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <script is:inline>try{const t=localStorage.getItem("theme");if(t==="dark"||t==="light")document.documentElement.dataset.theme=t;}catch{}</script>
   </head>
