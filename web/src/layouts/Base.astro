@@ -22,6 +22,19 @@ const { title, description = 'Bifrost: the data bridge of Experimental Neuroradi
       </div>
     </header>
     <main><slot /></main>
+    <script is:inline>
+      // Every prose code block gets a copy button; the wrapper keeps it put while the code scrolls sideways.
+      document.querySelectorAll('.prose pre').forEach((pre)=>{
+        const w=document.createElement('div');w.className='pre-wrap';pre.replaceWith(w);w.append(pre);
+        const b=document.createElement('button');b.type='button';b.className='copy-code';b.textContent='Copy';
+        b.addEventListener('click',async()=>{
+          const t=(pre.querySelector('code')||pre).innerText;
+          try{await navigator.clipboard.writeText(t);}catch{const ta=document.createElement('textarea');ta.value=t;document.body.append(ta);ta.select();document.execCommand('copy');ta.remove();}
+          b.textContent='Copied';b.classList.add('done');setTimeout(()=>{b.textContent='Copy';b.classList.remove('done');},1600);
+        });
+        w.append(b);
+      });
+    </script>
     <script is:inline>const T={system:'Theme: as the system (click for dark)',dark:'Theme: dark (click for light)',light:'Theme: light (click for system)'};const setT=()=>document.querySelectorAll('[data-theme-toggle]').forEach((b)=>b.title=T[document.documentElement.dataset.theme||'system']);setT();document.querySelectorAll('[data-theme-toggle]').forEach((b)=>b.addEventListener('click',()=>{const r=document.documentElement;const cur=r.dataset.theme||'system';const next=cur==='system'?'dark':cur==='dark'?'light':'system';try{if(next==='system'){localStorage.removeItem('theme');delete r.dataset.theme;}else{localStorage.setItem('theme',next);r.dataset.theme=next;}}catch{}setT();}));</script>
     <footer><div class="wrap"><span>Bifrost is run by Experimental Neuroradiology Research at Karolinska Institutet. Every transfer is checked byte for byte and recorded.</span><span>Questions: <a href="mailto:admin@kineuro.se">admin@kineuro.se</a></span></div></footer>
   </body>
