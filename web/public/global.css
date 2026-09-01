@@ -6,16 +6,16 @@
   --ink: #1C1A1F; --ink-soft: #3E3944; --muted: #6B6470;
   --rule: #E4E1DC; --ground: #F6F5F2; --panel: #ECE9E4; --surface: #FFFFFF;
   --ok: #1F6E43; --warn: #B9621C; --bad: #A4232B; --ok-bg: #E1F0E7; --warn-bg: #FBEEDF; --bad-bg: #F8E1E2;
-  --link: #4F0433; --on-plum: #F6F5F2;
+  --link: #4F0433; --on-plum: #F6F5F2; --glyph: #4F0433;
   --serif: "IBM Plex Serif", Georgia, serif; --sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
   --max: 1100px;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --ground: #141416; --surface: #222226; --panel: #2A2A2F; --ink: #ECEAE6; --ink-soft: #C9C6C1; --muted: #93909A; --rule: #333238; --plum-tint: #2E1C29; --plum-hover: #6B1A4C; --link: #B57CA1; --ok: #7FCB9A; --ok-bg: #1C3327; --warn: #E3A46A; --warn-bg: #3A2A1A; --bad: #E58A90; --bad-bg: #3A1F22; color-scheme: dark; }
+  :root:not([data-theme="light"]) { --ground: #141416; --surface: #222226; --panel: #2A2A2F; --ink: #ECEAE6; --ink-soft: #C9C6C1; --muted: #93909A; --rule: #333238; --plum-tint: #2E1C29; --glyph: #ECEAE6; --plum-hover: #6B1A4C; --link: #B57CA1; --ok: #7FCB9A; --ok-bg: #1C3327; --warn: #E3A46A; --warn-bg: #3A2A1A; --bad: #E58A90; --bad-bg: #3A1F22; color-scheme: dark; }
 }
-:root[data-theme="dark"] { --ground: #141416; --surface: #222226; --panel: #2A2A2F; --ink: #ECEAE6; --ink-soft: #C9C6C1; --muted: #93909A; --rule: #333238; --plum-tint: #2E1C29; --plum-hover: #6B1A4C; --link: #B57CA1; --ok: #7FCB9A; --ok-bg: #1C3327; --warn: #E3A46A; --warn-bg: #3A2A1A; --bad: #E58A90; --bad-bg: #3A1F22; color-scheme: dark; }
+:root[data-theme="dark"] { --ground: #141416; --surface: #222226; --panel: #2A2A2F; --ink: #ECEAE6; --ink-soft: #C9C6C1; --muted: #93909A; --rule: #333238; --plum-tint: #2E1C29; --glyph: #ECEAE6; --plum-hover: #6B1A4C; --link: #B57CA1; --ok: #7FCB9A; --ok-bg: #1C3327; --warn: #E3A46A; --warn-bg: #3A2A1A; --bad: #E58A90; --bad-bg: #3A1F22; color-scheme: dark; }
 html { color-scheme: light; }
 body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); font-size: 16px; line-height: 1.55; min-height: 100vh; display: flex; flex-direction: column; }
 a { color: var(--link); text-decoration: none; }
