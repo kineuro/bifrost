@@ -106,7 +106,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 20px; padding
    box (grid cells carry min-width: 0), the page itself never scrolls sideways. */
 .grid2 > *, .hero2 > * { min-width: 0; }
 pre { overscroll-behavior-x: contain; }
-.prose code { overflow-wrap: anywhere; } /* a long URL or path in inline code breaks instead of widening the page (inert inside pre, which never wraps) */
+code { overflow-wrap: anywhere; } /* a long URL or path in inline code breaks instead of widening the page (inert inside pre, which never wraps) */
 @media (max-width: 900px) {
   .hero2 { grid-template-columns: 1fr; gap: 32px; }
 }
