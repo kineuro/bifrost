@@ -21,6 +21,20 @@ export const pub = new Hono<Env>();
 
 const clientIp = (c: Context) => (c.req.header('x-forwarded-for') ?? '').split(',')[0].trim() || (c.env as any)?.incoming?.socket?.remoteAddress || '0.0.0.0';
 
+// An upload whose client went away fails its stream pipeline (ECONNRESET, premature close); that is the partner's
+// doing, not ours: it is counted as an abort and answered 400 (to nobody), never logged or counted as a 5xx.
+// Reading c.req.raw.signal at the start of a handler is what makes @hono/node-server abort it on disconnect.
+function clientAborted(c: Context, e: unknown): boolean {
+  const code = (e as { code?: string })?.code;
+  return c.req.raw.signal.aborted || code === 'ECONNRESET' || code === 'ERR_STREAM_PREMATURE_CLOSE' || (e as Error)?.message === 'aborted';
+}
+function abortOrRethrow(c: Context, e: unknown, what: string): never {
+  if (!clientAborted(c, e)) throw e;
+  metrics.aborted.inc();
+  console.warn(now(), 'aborted', what, 'bridge', c.get('share')?.id ?? '?');
+  throw new HttpError(400, `${what} aborted by the client`);
+}
+
 function shareView(share: Share) {
   const u = shareUsage(share.id);
   return {
@@ -155,6 +169,7 @@ pub.put('/upload/:id/part/:n', async (c) => {
   if (!Number.isInteger(n) || n < 0 || n >= u.parts_total) throw new HttpError(400, 'bad part number');
   const release = acquire(cred.id);
   if (!release) { c.header('Retry-After', '3'); return c.json({ error: 'busy', streams: config.maxStreamsPerClient }, 503); }
+  void c.req.raw.signal;
   try {
     const expect = c.req.header('x-part-sha256');
     const h = createHash('sha256');
@@ -167,7 +182,7 @@ pub.put('/upload/:id/part/:n', async (c) => {
         async write(chunk: Buffer, _e, cb) {
           try { h.update(chunk); await fh.write(chunk, 0, chunk.length, pos); pos += chunk.length; len += chunk.length; cb(); } catch (e) { cb(e as Error); }
         }, highWaterMark: 4 * 1024 * 1024,
-      }));
+      })).catch((e) => abortOrRethrow(c, e, `part ${n}`));
     } finally { await fh.close(); }
     if (len !== expectedLen) throw new HttpError(400, `part ${n}: expected ${expectedLen} bytes, got ${len}`);
     const sum = h.digest('hex');
@@ -212,9 +227,11 @@ pub.post('/upload/batch', async (c) => {
   checkQuota(share, declared, files);
   const release = acquire(cred.id);
   if (!release) { c.header('Retry-After', '3'); return c.json({ error: 'busy' }, 503); }
+  void c.req.raw.signal;
   try {
     const zstd = (c.req.header('content-encoding') ?? '').includes('zstd') || c.req.query('zstd') === '1';
-    const results = await receiveBatch(share, 'in', Readable.fromWeb(c.req.raw.body as any), zstd, cred.id);
+    const results = await receiveBatch(share, 'in', Readable.fromWeb(c.req.raw.body as any), zstd, cred.id)
+      .catch((e) => abortOrRethrow(c, e, 'batch'));
     const bytes = results.reduce((n, r) => n + r.size, 0);
     metrics.bytesIn.inc(bytes);
     q.transfer.run(share.id, cred.id, 'upload', bytes, results.length, now(), c.get('ip'), c.req.header('user-agent') ?? '');
@@ -230,8 +247,10 @@ pub.put('/upload/file', async (c) => {
   checkQuota(share, declared, 1);
   const release = acquire(cred.id);
   if (!release) { c.header('Retry-After', '3'); return c.json({ error: 'busy' }, 503); }
+  void c.req.raw.signal;
   try {
-    const r = await receiveFile(resolveIn(share, 'in', p), Readable.fromWeb(c.req.raw.body as any));
+    const r = await receiveFile(resolveIn(share, 'in', p), Readable.fromWeb(c.req.raw.body as any))
+      .catch((e) => abortOrRethrow(c, e, 'file'));
     q.upsertFile.run(share.id, 'in', p, r.size, r.sha256, null, cred.id, now());
     q.transfer.run(share.id, cred.id, 'upload', r.size, 1, now(), c.get('ip'), c.req.header('user-agent') ?? '');
     metrics.bytesIn.inc(r.size);

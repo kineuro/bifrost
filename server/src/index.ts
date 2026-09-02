@@ -24,14 +24,15 @@ const app = new Hono();
 app.use('*', async (c, next) => {
   metrics.requests.inc();
   await next();
-  if (c.res.status >= 500) metrics.errors.inc();
+  // Counted here only (app.onError answers, this sees its status). 503 is the stream budget saying no, not a fault.
+  if (c.res.status === 503) metrics.busy.inc();
+  else if (c.res.status >= 500) metrics.errors.inc();
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
 });
 app.onError((err, c) => {
   if (err instanceof HttpError) return c.json({ error: err.message }, err.status as any);
   console.error(now(), 'error', c.req.method, c.req.path, err);
-  metrics.errors.inc();
   return c.json({ error: 'internal error' }, 500);
 });
 
@@ -130,4 +131,8 @@ const server = createServer((req, res) => {
   return hono(req, res);
 });
 server.requestTimeout = 0; server.headersTimeout = 60_000; server.keepAliveTimeout = 75_000;
+// A socket with no traffic for this long is dropped, which ends its request and frees its stream slot: a partner
+// whose connection died without a reset (a NAT that forgot it, a laptop that went to sleep) cannot hold a slot for
+// ever. An upload in progress always has traffic; a slow one only needs a byte within the window.
+server.timeout = 20 * 60_000;
 server.listen(config.port, '0.0.0.0', () => console.log(now(), `bifrost ${config.version} listening on ${config.port}, exchange ${config.exchange}, site ${publicDir}`));

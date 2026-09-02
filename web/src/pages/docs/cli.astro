@@ -58,7 +58,7 @@ bifrost pull ./sub --from release_2026/derivatives   # only one folder</code></p
         <tr><th>Option</th><th>Meaning</th></tr>
         <tr><td><code>--to &lt;path&gt;</code></td><td><em>push</em>: put the data under this folder on the bridge (default: the folder's own name)</td></tr>
         <tr><td><code>--from &lt;path&gt;</code></td><td><em>pull</em>: fetch only this folder</td></tr>
-        <tr><td><code>--workers &lt;n&gt;</code></td><td>parallel streams (default 6; the bridge sets a ceiling and tells the tool to wait when it is busy)</td></tr>
+        <tr><td><code>--workers &lt;n&gt;</code></td><td>parallel streams, the most the tool holds open at once, large-file parts included (default 6; the bridge sets a ceiling and tells the tool to wait when it is busy)</td></tr>
         <tr><td><code>--limit 50M</code></td><td>bandwidth cap in bytes per second (K, M, G suffixes), for a shared office line</td></tr>
         <tr><td><code>--exclude '*.tmp'</code></td><td>skip matching names or paths; repeatable</td></tr>
         <tr><td><code>--checksum</code></td><td>hash everything first and skip only exact matches (default: same size counts as present)</td></tr>

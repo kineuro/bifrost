@@ -3,7 +3,7 @@ import { q, shareUsage } from './db.js';
 import { streams } from './files.js';
 
 class Counter { v = 0; inc(n = 1) { this.v += n; } }
-export const metrics = { bytesIn: new Counter(), bytesOut: new Counter(), requests: new Counter(), errors: new Counter() };
+export const metrics = { bytesIn: new Counter(), bytesOut: new Counter(), requests: new Counter(), errors: new Counter(), busy: new Counter(), aborted: new Counter() };
 
 export function render(): string {
   const lines: string[] = [];
@@ -17,7 +17,9 @@ export function render(): string {
   g('bifrost_bytes_received_total', 'Bytes received from partners', 'counter', [[{}, metrics.bytesIn.v]]);
   g('bifrost_bytes_sent_total', 'Bytes sent to partners', 'counter', [[{}, metrics.bytesOut.v]]);
   g('bifrost_requests_total', 'API requests', 'counter', [[{}, metrics.requests.v]]);
-  g('bifrost_errors_total', 'API errors (5xx)', 'counter', [[{}, metrics.errors.v]]);
+  g('bifrost_errors_total', 'API errors (5xx other than busy)', 'counter', [[{}, metrics.errors.v]]);
+  g('bifrost_busy_total', 'Transfers refused with 503 because the stream budget was full', 'counter', [[{}, metrics.busy.v]]);
+  g('bifrost_aborted_total', 'Uploads cut off by the client before they were complete', 'counter', [[{}, metrics.aborted.v]]);
   const s = streams();
   g('bifrost_streams_active', 'Transfer streams in flight', 'gauge', [[{}, s.total]]);
   g('bifrost_streams_max', 'Transfer stream budget', 'gauge', [[{}, s.max]]);

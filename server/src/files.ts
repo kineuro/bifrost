@@ -124,8 +124,11 @@ export async function receiveBatch(share: Share, box: Box, body: Readable, zstd:
       })
       .catch((e) => next(e));
   });
-  const src = zstd ? body.pipe(zlib.createZstdDecompress()) : body;
-  await pipeline(src, extract);
+  // The body goes through pipeline() with the decompressor, never body.pipe(): pipe() forwards data but not
+  // errors, so a client that vanished mid-upload left the extractor waiting forever, the request never
+  // returned, and the caller's stream slot stayed taken (2026-09-02: 17 such requests pinned the budget).
+  if (zstd) await pipeline(body, zlib.createZstdDecompress(), extract);
+  else await pipeline(body, extract);
   return results;
 }
 

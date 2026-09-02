@@ -521,15 +521,16 @@ func cmdPush(ctx context.Context, args []string) error {
 		}
 	}
 	batches := makeBatches(small, lim.BatchBytes, lim.BatchFiles)
+	sem := make(streamSem, o.workers)
 	var jobs []func() error
 	for _, b := range batches {
 		b := b
-		jobs = append(jobs, func() error { return pushBatch(ctx, c, b, remote, rl, prog) })
+		jobs = append(jobs, func() error { return pushBatch(ctx, c, b, remote, rl, prog, sem) })
 	}
 	for _, f := range large {
 		f := f
 		r := resumable[remote(f.rel)]
-		jobs = append(jobs, func() error { return pushLarge(ctx, c, f, remote(f.rel), lim, r.id, r.parts, rl, prog, o.workers) })
+		jobs = append(jobs, func() error { return pushLarge(ctx, c, f, remote(f.rel), lim, r.id, r.parts, rl, prog, o.workers, sem) })
 	}
 	// Large files first (they need the most time), then batches; a worker pool runs them.
 	err = runPool(ctx, o.workers, jobs)
@@ -588,6 +589,22 @@ func makeBatches(files []*localFile, maxBytes int64, maxFiles int) [][]*localFil
 	return out
 }
 
+// streamSem bounds the transfer streams of one push to --workers, batches and large-file parts together, so a
+// push never holds more streams on the bridge than it was told to use. Without it every pool worker that met a
+// large file opened workers/2 part streams of its own: 24 workers could ask for far more than the bridge's
+// budget, and the 503 hold-offs that followed stalled every client on the bridge (2026-09-02).
+type streamSem chan struct{}
+
+func (s streamSem) acquire(ctx context.Context) error {
+	select {
+	case s <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (s streamSem) release() { <-s }
+
 func runPool(ctx context.Context, workers int, jobs []func() error) error {
 	var wg sync.WaitGroup
 	ch := make(chan func() error)
@@ -629,7 +646,7 @@ func runPool(ctx context.Context, workers int, jobs []func() error) error {
 }
 
 // pushBatch streams one tar.zst of small files; the server answers with what it wrote and its hashes.
-func pushBatch(ctx context.Context, c *Client, files []*localFile, remote func(string) string, rl *limiter, prog *progress) error {
+func pushBatch(ctx context.Context, c *Client, files []*localFile, remote func(string) string, rl *limiter, prog *progress, sem streamSem) error {
 	var bytesDeclared int64
 	for _, f := range files {
 		bytesDeclared += f.size
@@ -637,6 +654,10 @@ func pushBatch(ctx context.Context, c *Client, files []*localFile, remote func(s
 	local := map[string]string{}
 	var lmu sync.Mutex
 	err := retry(ctx, 5, func() error {
+		if err := sem.acquire(ctx); err != nil {
+			return err
+		}
+		defer sem.release()
 		pr, pw := io.Pipe()
 		go func() {
 			zw, _ := zstd.NewWriter(pw, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderConcurrency(2))
@@ -727,7 +748,7 @@ func pushBatch(ctx context.Context, c *Client, files []*localFile, remote func(s
 }
 
 // pushLarge sends one big file as parts, several in flight, then asks the server to verify and place it.
-func pushLarge(ctx context.Context, c *Client, f *localFile, rpath string, lim Limits, resumeID string, done []int, rl *limiter, prog *progress, workers int) error {
+func pushLarge(ctx context.Context, c *Client, f *localFile, rpath string, lim Limits, resumeID string, done []int, rl *limiter, prog *progress, workers int, sem streamSem) error {
 	if f.sha == "" {
 		prog.note("hashing " + f.rel)
 		s, err := sha256File(f.abs)
@@ -781,6 +802,10 @@ func pushLarge(ctx context.Context, c *Client, f *localFile, rpath string, lim L
 				off := int64(n) * init.PartSize
 				size := min64(init.PartSize, f.size-off)
 				err := retry(ctx, 6, func() error {
+					if err := sem.acquire(ctx); err != nil {
+						return err
+					}
+					defer sem.release()
 					fh, err := os.Open(f.abs)
 					if err != nil {
 						return err

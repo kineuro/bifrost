@@ -20,7 +20,7 @@ Built and run by [Experimental Neuroradiology Research at Karolinska Institutet]
 
 - **Plan first.** The client indexes the folder and asks the server which files it already has (by path and size, or hash with `--checksum`). Only the rest is sent, so a rerun is a resume.
 - **Two lanes.** Files above 64 MB go as 32 MB parts, several in flight, each part hashed and checked on arrival, then the whole file is hashed again before it is placed. Smaller files are packed into tar batches of about 256 MB or 5,000 files, zstd-compressed on the fly, and unpacked and hashed on the server, so a DICOM study is a few hundred requests instead of a few hundred thousand.
-- **Budget.** The server caps concurrent streams globally and per client and answers `503 Retry-After` when busy; the CLI waits and continues.
+- **Budget.** The server caps concurrent streams globally and per client and answers `503 Retry-After` when busy; the CLI waits and continues. A push never holds more streams than its `--workers`, parts of large files included; a stream whose client vanishes is released at once, and a socket silent for twenty minutes is dropped.
 - **State on the server.** Received files and in-progress parts are recorded in SQLite, so a resume needs no local state and works from another machine.
 - **Downloads** mirror it: HTTP Range for large files, tar batches for small ones, zip on the fly for the browser.
 

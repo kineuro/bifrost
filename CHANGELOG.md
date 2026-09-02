@@ -6,6 +6,15 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-02
+
+### Fixed
+- An upload cut off by the client (a killed `bifrost push`, a dropped connection) left its request hanging on the server and its transfer stream taken for ever; enough of them pinned the budget, every client then got `503 busy`, and transfers on all bridges stalled. The batch body now goes through a proper pipeline, an abort ends the request and frees the stream at once, and a socket silent for twenty minutes is dropped.
+- `bifrost push` could hold far more streams than `--workers`: each worker that met a large file opened `workers/2` part streams of its own. The parts now share the worker budget, so `--workers` is the number of streams a push holds, and two pushes sized within the bridge's budget no longer trip it.
+
+### Changed
+- Metrics: `bifrost_errors_total` no longer counts `503 busy` (that is the budget at work, not a fault) nor counts an internal error twice; new `bifrost_busy_total` and `bifrost_aborted_total`. Aborted uploads are logged with the bridge id.
+
 ## [1.0.2] - 2026-09-01
 
 ### Added
