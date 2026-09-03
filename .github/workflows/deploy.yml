@@ -10,10 +10,18 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }   # tags, for the version
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          # Without this every run downloads both dependency trees from the registry again, which was almost all
+          # of the run: nine minutes of the thirteen. Both lockfiles are hashed, so the cache turns over only when
+          # one of them changes.
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            server/package-lock.json
       - name: version
         id: v
         # the last tag, plus the commit when main has moved past it (e.g. 1.0.0 or 1.0.0+3.a1b2c3d)
@@ -22,9 +30,18 @@ jobs:
           v=${t#v}; [ "$n" != 0 ] && v="$v+$n.${GITHUB_SHA::7}"; echo "v=$v" >> "$GITHUB_OUTPUT"
 
       - name: build the server once here, so a broken commit never reaches the VM
+        env:
+          NPM_CONFIG_AUDIT: "false"        # the lockfile is what we install; the audit is a round trip we do not need
+          NPM_CONFIG_FUND: "false"
+          NPM_CONFIG_PREFER_OFFLINE: "true"
         run: |
-          (cd web && npm ci && npm run build)
-          (cd server && npm ci && npm run build)
+          # Neither install needs the other and both spend their time waiting on the network, so they overlap.
+          # Waiting on each pid rather than a bare `wait` keeps a failed install a failed build.
+          (cd web && npm ci) & web=$!
+          (cd server && npm ci) & srv=$!
+          wait $web; wait $srv
+          (cd web && npm run build)
+          (cd server && npm run build)
 
       - name: take the CLI binaries from the latest GitHub release (built by the release workflow)
         env:
@@ -39,14 +56,22 @@ jobs:
           KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           install -m 600 /dev/null key; printf '%s\n' "$KEY" > key
+          # The gateway's own host key, so the runner knows it is talking to Warpgate and not to whoever answered.
+          # A fresh runner trusts nothing, so `accept-new` here meant accepting whatever key turned up.
+          cat > known_hosts <<'KH'
+          ssh.kineuro.se ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAc27JgEFQrzEDT9X+VschGd2qq5EjoDVbb0tFTyzdfX
+          KH
           cat > sshcfg <<'CFG'
           Host bifrost
             HostName ssh.kineuro.se
             User deploy:bifrost-deploy
             IdentityFile key
             IdentitiesOnly yes
-            StrictHostKeyChecking accept-new
-            ProxyCommand openssl s_client -quiet -connect ssh.kineuro.se:443 -servername ssh.kineuro.se 2>/dev/null
+            UserKnownHostsFile known_hosts
+            StrictHostKeyChecking yes
+            # -verify_return_error makes openssl hang up on a certificate that does not check out; without it
+            # s_client prints the error and carries on, which left the tunnel itself unauthenticated.
+            ProxyCommand openssl s_client -quiet -verify_return_error -verify 5 -connect ssh.kineuro.se:443 -servername ssh.kineuro.se 2>/dev/null
           CFG
-          rsync -az --delete --exclude node_modules --exclude 'server/public' --exclude 'server/dist' --exclude .git --exclude .env --exclude key --exclude sshcfg --exclude 'cli/bin' -e "ssh -F sshcfg" ./ bifrost:/srv/bifrost/
+          rsync -az --delete --exclude node_modules --exclude 'server/public' --exclude 'server/dist' --exclude .git --exclude .env --exclude key --exclude known_hosts --exclude sshcfg --exclude 'cli/bin' -e "ssh -F sshcfg" ./ bifrost:/srv/bifrost/
           ssh -F sshcfg bifrost "cd /srv/bifrost && BIFROST_VERSION=${{ steps.v.outputs.v }} docker compose up -d --build 2>&1 | tail -3 && docker image prune -f >/dev/null && sleep 3 && curl -s http://127.0.0.1:8080/api/health"
