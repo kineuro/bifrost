@@ -6,6 +6,13 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+### Fixed
+- Accepting a very large inbox failed. `bifrost-accept` asks the server for a manifest of everything the bridge received; the server answered by walking the tree, stat by stat, holding every entry in memory and returning them as one JSON array. At migration scale (4.2 million files) the walk ran for hours while the socket carried nothing, so the twenty minute idle timeout added in 1.0.3 dropped it, and the array would in any case have exceeded the largest string the runtime can make. The manifest now comes from the bridge's own records, read in pages off the primary key and streamed as ndjson: a bridge of millions of files is answered in seconds, and neither side holds more than a page.
+
+### Changed
+- Directory listings stat their entries several at a time instead of one after another, and a walk lists several directories at once and hands entries over as it finds them. A stat is a threadpool job, so a serial walk on a busy server spent nearly all its time queueing: listing part of a large inbox went from 36 ms a file to well under one. `GET /admin/shares/:id/files` takes `format=ndjson` to stream a tree rather than build it in memory.
+- The container asks for a libuv threadpool of 32 rather than the default of 4. Every read, write and hash the server does passes through it, so on a four thread pool dozens of transfer streams and any listing all queue behind one another.
+
 ## [1.0.3] - 2026-09-02
 
 ### Fixed

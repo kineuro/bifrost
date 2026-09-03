@@ -3,8 +3,8 @@ import { Hono } from 'hono';
 import { timingSafeEqual } from 'node:crypto';
 import { hashSecret, newToken } from '../auth.js';
 import { config } from '../config.js';
-import { audit, db, now, q, shareUsage, type Direction, type Share, type ShareStatus } from '../db.js';
-import { ensureBoxes, HttpError, listDir, removeShareData, streams, walk } from '../files.js';
+import { audit, db, now, q, shareUsage, type Box, type Direction, type Share, type ShareStatus } from '../db.js';
+import { ensureBoxes, HttpError, listDir, removeShareData, streams, walk, walkStream } from '../files.js';
 import { randomBytes } from 'node:crypto';
 
 export const admin = new Hono();
@@ -102,11 +102,59 @@ admin.delete('/credentials/:id', (c) => {
   return c.body(null, 204);
 });
 
+const NDJSON = { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' };
+const MANIFEST_PAGE = 2000;
+const LINES_PER_CHUNK = 500;
+
+// Records as an ndjson body: one JSON object per line, encoded a chunk at a time and only as the reader asks for
+// it. Memory holds a chunk, never the listing, and the source is closed if the reader gives up early.
+function lines(src: AsyncGenerator<unknown>): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  return new ReadableStream({
+    async pull(ctrl) {
+      const buf: string[] = [];
+      while (buf.length < LINES_PER_CHUNK) {
+        const { value, done } = await src.next();
+        if (done) break;
+        buf.push(JSON.stringify(value));
+      }
+      if (buf.length) ctrl.enqueue(enc.encode(buf.join('\n') + '\n'));
+      else ctrl.close();
+    },
+    cancel: (r) => void src.return?.(r),
+  });
+}
+
 admin.get('/shares/:id/files', async (c) => {
   const s = q.share.get(c.req.param('id')); if (!s) throw new HttpError(404, 'no such bridge');
-  const box = (c.req.query('box') ?? 'in') as 'in' | 'out';
+  const box = (c.req.query('box') ?? 'in') as Box;
   const all = c.req.query('all') === '1';
-  return c.json({ box, entries: all ? await walk(s, box, c.req.query('path') ?? '') : await listDir(s, box, c.req.query('path') ?? '') });
+  const rel = c.req.query('path') ?? '';
+  // A whole tree as one JSON array only works while the tree is small. Asked for as ndjson it is streamed
+  // instead, a file per line, so neither the server nor the caller ever holds the whole listing.
+  if (all && c.req.query('format') === 'ndjson') return c.body(lines(walkStream(s, box, rel)), 200, NDJSON);
+  return c.json({ box, entries: all ? await walk(s, box, rel) : await listDir(s, box, rel) });
+});
+
+// The manifest of a box: what the bridge recorded it accepted, one JSON object per line. It comes from the
+// records, not from a walk of the tree, because the records already carry the size and the checksum of every
+// file: a manifest of millions of files is then a handful of indexed page reads rather than millions of stats.
+// Reading it in pages also keeps bytes moving, so a slow caller never leaves the socket idle long enough for
+// `server.timeout` to drop it, and neither side has to hold the manifest whole.
+admin.get('/shares/:id/manifest', (c) => {
+  const s = q.share.get(c.req.param('id')); if (!s) throw new HttpError(404, 'no such bridge');
+  const box = (c.req.query('box') ?? 'in') as Box;
+  const id = s.id;
+  async function* rows() {
+    let after = '';
+    for (;;) {
+      const page = q.filesPage.all(id, box, after, MANIFEST_PAGE);
+      if (!page.length) return;
+      after = page[page.length - 1].path;
+      for (const r of page) yield r;
+    }
+  }
+  return c.body(lines(rows()), 200, { ...NDJSON, 'x-bifrost-files': String(q.filesCount.get(s.id, box)?.c ?? 0) });
 });
 admin.get('/shares/:id/activity', (c) => {
   const s = q.share.get(c.req.param('id')); if (!s) throw new HttpError(404, 'no such bridge');

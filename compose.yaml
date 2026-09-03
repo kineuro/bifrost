@@ -14,6 +14,10 @@ services:
       EXCHANGE_ROOT: /exchange
       BIFROST_VERSION: ${BIFROST_VERSION:-dev}
       BIN_DIR: /app/server/bin
+      # Every file read, write and hash goes through libuv's threadpool, which is four threads unless it is told
+      # otherwise. With dozens of transfer streams in flight that is the queue everything waits in, and a listing
+      # of a large inbox waits behind all of it. Give it room; these threads only ever block on the filesystem.
+      UV_THREADPOOL_SIZE: "32"
     volumes:
       - /exchange:/exchange
       - ./bin:/app/server/bin:ro

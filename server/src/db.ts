@@ -87,6 +87,11 @@ export const q = {
   credsOf: db.prepare<[string], Credential>('SELECT * FROM credentials WHERE share_id = ? ORDER BY created_at'),
   filesOf: db.prepare<[string, string], FileRow>('SELECT * FROM files WHERE share_id = ? AND box = ? ORDER BY path'),
   file: db.prepare<[string, string, string], FileRow>('SELECT * FROM files WHERE share_id = ? AND box = ? AND path = ?'),
+  // A manifest is read a page at a time, keyed on the last path already sent: the primary key (share_id, box, path)
+  // makes every page an index range scan, so a bridge of millions of files costs no more per page than a small one.
+  filesPage: db.prepare<[string, string, string, number], Pick<FileRow, 'path' | 'size' | 'sha256' | 'mtime'>>(
+    'SELECT path, size, sha256, mtime FROM files WHERE share_id = ? AND box = ? AND path > ? ORDER BY path LIMIT ?'),
+  filesCount: db.prepare<[string, string], { c: number }>('SELECT COUNT(*) AS c FROM files WHERE share_id = ? AND box = ?'),
   upsertFile: db.prepare(`INSERT INTO files (share_id, box, path, size, sha256, mtime, credential_id, completed_at) VALUES (?,?,?,?,?,?,?,?)
     ON CONFLICT(share_id, box, path) DO UPDATE SET size=excluded.size, sha256=excluded.sha256, mtime=excluded.mtime, credential_id=excluded.credential_id, completed_at=excluded.completed_at`),
   deleteFile: db.prepare('DELETE FROM files WHERE share_id = ? AND box = ? AND path = ?'),

@@ -34,6 +34,22 @@ export function resolveIn(share: Share, box: Box, rel: string): string {
 }
 
 export interface Entry { name: string; path: string; dir: boolean; size: number; mtime: string; sha256?: string | null }
+
+// A stat is a libuv threadpool job, and the pool is shared with every read, write and hash the server has in
+// flight. Awaited one after another, a listing is a queue of round trips through it: on a busy server that cost
+// per file is thousands of times the cost of the stat itself. These two numbers fan the work out instead, wide
+// enough to keep the pool fed and bounded so that one listing cannot take it over.
+const STAT_FANOUT = 32;
+const DIR_FANOUT = 16;
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => { for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]); };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 export async function listDir(share: Share, box: Box, rel: string): Promise<Entry[]> {
   const abs = resolveIn(share, box, rel);
   let ents: fs.Dirent[];
@@ -41,26 +57,49 @@ export async function listDir(share: Share, box: Box, rel: string): Promise<Entr
     if (e.code === 'ENOENT') return [];
     throw e;
   }
+  const keep = ents.filter((e) => !e.name.startsWith('.bifrost') && !e.name.includes('.bifrost-tmp'));
+  const stats = await mapLimit(keep, STAT_FANOUT, (e) => fsp.stat(path.join(abs, e.name)).catch(() => null));
+  const base = rel ? cleanPath(rel) : '';
   const out: Entry[] = [];
-  for (const e of ents) {
-    if (e.name.startsWith('.bifrost') || e.name.includes('.bifrost-tmp')) continue;
-    const st = await fsp.stat(path.join(abs, e.name)).catch(() => null);
-    if (!st) continue;
-    const p = rel ? `${cleanPath(rel)}/${e.name}` : e.name;
+  keep.forEach((e, i) => {
+    const st = stats[i];
+    if (!st) return;
+    const p = base ? `${base}/${e.name}` : e.name;
     const row = st.isFile() ? q.file.get(share.id, box, p) : null;
     out.push({ name: e.name, path: p, dir: st.isDirectory(), size: st.isDirectory() ? 0 : st.size, mtime: st.mtime.toISOString(), sha256: row?.sha256 ?? null });
-  }
+  });
   return out.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
 }
-// Every file under a box (for manifests and batch downloads).
+
+// Every file under a box, handed over as it is found. Several directories are listed at once and nothing is kept
+// but the listings in flight and the directories still to visit, so the tree can be far larger than memory.
+export async function* walkStream(share: Share, box: Box, rel = ''): AsyncGenerator<Entry> {
+  type Job = { self: Promise<Job>; entries?: Entry[]; err?: unknown };
+  const todo: string[] = [rel];
+  const running = new Set<Promise<Job>>();
+  const start = (dir: string) => {
+    let self!: Promise<Job>;
+    self = listDir(share, box, dir).then((entries) => ({ self, entries }), (err) => ({ self, err }));
+    running.add(self);
+  };
+  try {
+    while (todo.length || running.size) {
+      while (running.size < DIR_FANOUT && todo.length) start(todo.shift()!);
+      const job = await Promise.race(running);
+      running.delete(job.self);
+      if (job.err) throw job.err;
+      for (const e of job.entries!) { if (e.dir) todo.push(e.path); else yield e; }
+    }
+  } finally {
+    // Whether we threw or the reader walked away, the listings still out there must not reject into nothing.
+    for (const p of running) p.catch(() => {});
+  }
+}
+
+// The same walk collected, for the callers that need the whole list at once (a batch download, a small listing).
 export async function walk(share: Share, box: Box, rel = ''): Promise<Entry[]> {
   const out: Entry[] = [];
-  const rec = async (r: string) => {
-    for (const e of await listDir(share, box, r)) {
-      if (e.dir) await rec(e.path); else out.push(e);
-    }
-  };
-  await rec(rel);
+  for await (const e of walkStream(share, box, rel)) out.push(e);
   return out;
 }
 
