@@ -211,16 +211,39 @@ export function acquire(credId: string): (() => void) | null {
 }
 export const streams = () => ({ total, max: config.maxStreams, perClient: config.maxStreamsPerClient });
 
-// Remove abandoned temporary files (a batch that died mid-way) older than a day.
+// Remove abandoned temporary files (a batch that died mid-way) older than a day. This visits every inbox, which
+// during a migration is millions of directories, so it walks several at a time rather than one after another: a
+// serial sweep took long enough that the hourly timer started the next one on top of it, and the pile of them
+// was one of the things holding the threadpool down.
 export async function sweepTemp(root: string) {
-  const rec = async (d: string) => {
+  const cutoff = Date.now() - 86400_000;
+  const todo: string[] = [root];
+  const running = new Set<Promise<{ self: Promise<any>; dirs: string[] }>>();
+  const list = async (d: string) => {
+    const dirs: string[] = [];
+    const olds: string[] = [];
     for (const e of await fsp.readdir(d, { withFileTypes: true }).catch(() => [] as fs.Dirent[])) {
       const p = path.join(d, e.name);
-      if (e.isDirectory()) await rec(p);
-      else if (e.name.includes('.bifrost-tmp')) { const st = await fsp.stat(p).catch(() => null); if (st && Date.now() - st.mtimeMs > 86400_000) await fsp.unlink(p).catch(() => {}); }
+      if (e.isDirectory()) dirs.push(p);
+      else if (e.name.includes('.bifrost-tmp')) olds.push(p);
     }
+    await mapLimit(olds, STAT_FANOUT, async (p) => {
+      const st = await fsp.stat(p).catch(() => null);
+      if (st && st.mtimeMs < cutoff) await fsp.unlink(p).catch(() => {});
+    });
+    return dirs;
   };
-  await rec(root);
+  while (todo.length || running.size) {
+    while (running.size < DIR_FANOUT && todo.length) {
+      const d = todo.shift()!;
+      let self!: Promise<{ self: Promise<any>; dirs: string[] }>;
+      self = list(d).then((dirs) => ({ self, dirs }), () => ({ self, dirs: [] as string[] }));
+      running.add(self);
+    }
+    const job = await Promise.race(running);
+    running.delete(job.self);
+    todo.push(...job.dirs);
+  }
 }
 
 // Delete an upload's partial file and record.

@@ -119,7 +119,14 @@ async function housekeeping() {
   }
 }
 const warned = new Set<string>();
-setInterval(() => housekeeping().catch((e) => console.error('housekeeping', e)), 3600_000);
+// One run at a time. The sweep walks every inbox, and during a migration that can take longer than the hour
+// between runs: without this the timer stacked them up, each one competing for the same threadpool.
+let housekeepingRunning = false;
+setInterval(() => {
+  if (housekeepingRunning) return void console.log(now(), 'housekeeping still running, skipping this hour');
+  housekeepingRunning = true;
+  housekeeping().catch((e) => console.error(now(), 'housekeeping', e)).finally(() => { housekeepingRunning = false; });
+}, 3600_000);
 housekeeping().catch(() => {});
 
 process.on('uncaughtException', (e) => console.error(now(), 'uncaught', e));
