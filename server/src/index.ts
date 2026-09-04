@@ -36,7 +36,13 @@ app.onError((err, c) => {
   return c.json({ error: 'internal error' }, 500);
 });
 
-app.get('/api/health', (c) => c.json({ ok: true, version: config.version, exchange: fs.existsSync(config.inRoot) }));
+// Whether the exchange is mounted is worth reporting, but `existsSync` on an NFS path is a blocking call on the
+// event loop's own thread: when the mount is busy it stalls the whole server, and the health check is exactly
+// what everything asks for when the server is busy. Answer from a value refreshed quietly in the background.
+let exchangeMounted = fs.existsSync(config.inRoot);
+const checkMount = () => fsp.access(config.inRoot).then(() => { exchangeMounted = true; }, () => { exchangeMounted = false; });
+setInterval(() => void checkMount(), 15_000).unref();
+app.get('/api/health', (c) => c.json({ ok: true, version: config.version, exchange: exchangeMounted }));
 app.get('/metrics', (c) => c.text(render(), 200, { 'content-type': 'text/plain; version=0.0.4' }));
 // CLI distribution: the binaries are built by CI into bin/, served here with an install script.
 app.get('/api/cli', async (c) => {
@@ -96,10 +102,10 @@ app.get('/*', async (c) => {
 });
 
 // Housekeeping every hour: stale part uploads (7 days), expired bridges frozen, closed bridges emptied after the grace period.
-async function housekeeping() {
+async function housekeeping(sweep = false) {
   const stale = q.staleUploads.all(new Date(Date.now() - 7 * 86400_000).toISOString());
   for (const u of stale) await dropUpload(u.id);
-  await sweepTemp(config.inRoot).catch(() => {});
+  if (sweep) await sweepTemp(config.inRoot).catch(() => {});
   const t = now();
   for (const s of q.shares.all()) {
     if (s.status === 'open' && s.expires_at && s.expires_at < t) {
@@ -122,12 +128,16 @@ const warned = new Set<string>();
 // One run at a time. The sweep walks every inbox, and during a migration that can take longer than the hour
 // between runs: without this the timer stacked them up, each one competing for the same threadpool.
 let housekeepingRunning = false;
-setInterval(() => {
-  if (housekeepingRunning) return void console.log(now(), 'housekeeping still running, skipping this hour');
+const runHousekeeping = (sweep: boolean) => {
+  if (housekeepingRunning) return void console.log(now(), 'housekeeping still running, skipping this turn');
   housekeepingRunning = true;
-  housekeeping().catch((e) => console.error(now(), 'housekeeping', e)).finally(() => { housekeepingRunning = false; });
-}, 3600_000);
-housekeeping().catch(() => {});
+  housekeeping(sweep).catch((e) => console.error(now(), 'housekeeping', e)).finally(() => { housekeepingRunning = false; });
+};
+setInterval(() => runHousekeeping(false), 3600_000);
+// Deleting day-old scraps is a daily job, and on a migration inbox it is a walk of millions of directories: doing
+// it hourly, and once more every time the server starts, spent far more of the exchange than it ever reclaimed.
+setInterval(() => runHousekeeping(true), 24 * 3600_000);
+runHousekeeping(false);
 
 process.on('uncaughtException', (e) => console.error(now(), 'uncaught', e));
 process.on('unhandledRejection', (e) => console.error(now(), 'unhandled', e));

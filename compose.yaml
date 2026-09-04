@@ -14,10 +14,11 @@ services:
       EXCHANGE_ROOT: /exchange
       BIFROST_VERSION: ${BIFROST_VERSION:-dev}
       BIN_DIR: /app/server/bin
-      # Every file read, write and hash goes through libuv's threadpool, which is four threads unless it is told
-      # otherwise. With dozens of transfer streams in flight that is the queue everything waits in, and a listing
-      # of a large inbox waits behind all of it. Give it room; these threads only ever block on the filesystem.
-      UV_THREADPOOL_SIZE: "32"
+      # libuv's threadpool is four threads unless it is told otherwise, and every file read and write queues in
+      # it. Eight gives the transfer streams room on this four core VM. Thirty two did not: the exchange is NFS,
+      # and that many metadata operations at once put every new one behind a deep queue, including the ones the
+      # event loop makes on its own thread. Availability went from 100% to 75% until this came back down.
+      UV_THREADPOOL_SIZE: "8"
     volumes:
       - /exchange:/exchange
       - ./bin:/app/server/bin:ro
