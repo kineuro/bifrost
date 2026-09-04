@@ -71,28 +71,13 @@ export async function listDir(share: Share, box: Box, rel: string): Promise<Entr
   return out.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
 }
 
-// Every file under a box, handed over as it is found. Several directories are listed at once and nothing is kept
-// but the listings in flight and the directories still to visit, so the tree can be far larger than memory.
+// Every file under a box, handed over as it is found. Nothing is kept but the directory being listed and the
+// path back to the root, so the tree can be far larger than memory. The speed is in listDir, which stats a
+// directory's entries together; racing whole directories against each other as well was not worth what it cost.
 export async function* walkStream(share: Share, box: Box, rel = ''): AsyncGenerator<Entry> {
-  type Job = { self: Promise<Job>; entries?: Entry[]; err?: unknown };
-  const todo: string[] = [rel];
-  const running = new Set<Promise<Job>>();
-  const start = (dir: string) => {
-    let self!: Promise<Job>;
-    self = listDir(share, box, dir).then((entries) => ({ self, entries }), (err) => ({ self, err }));
-    running.add(self);
-  };
-  try {
-    while (todo.length || running.size) {
-      while (running.size < DIR_FANOUT && todo.length) start(todo.shift()!);
-      const job = await Promise.race(running);
-      running.delete(job.self);
-      if (job.err) throw job.err;
-      for (const e of job.entries!) { if (e.dir) todo.push(e.path); else yield e; }
-    }
-  } finally {
-    // Whether we threw or the reader walked away, the listings still out there must not reject into nothing.
-    for (const p of running) p.catch(() => {});
+  for (const e of await listDir(share, box, rel)) {
+    if (e.dir) yield* walkStream(share, box, e.path);
+    else yield e;
   }
 }
 
@@ -211,39 +196,22 @@ export function acquire(credId: string): (() => void) | null {
 }
 export const streams = () => ({ total, max: config.maxStreams, perClient: config.maxStreamsPerClient });
 
-// Remove abandoned temporary files (a batch that died mid-way) older than a day. This visits every inbox, which
-// during a migration is millions of directories, so it walks several at a time rather than one after another: a
-// serial sweep took long enough that the hourly timer started the next one on top of it, and the pile of them
-// was one of the things holding the threadpool down.
-export async function sweepTemp(root: string) {
-  const cutoff = Date.now() - 86400_000;
-  const todo: string[] = [root];
-  const running = new Set<Promise<{ self: Promise<any>; dirs: string[] }>>();
-  const list = async (d: string) => {
-    const dirs: string[] = [];
-    const olds: string[] = [];
-    for (const e of await fsp.readdir(d, { withFileTypes: true }).catch(() => [] as fs.Dirent[])) {
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) dirs.push(p);
-      else if (e.name.includes('.bifrost-tmp')) olds.push(p);
-    }
-    await mapLimit(olds, STAT_FANOUT, async (p) => {
-      const st = await fsp.stat(p).catch(() => null);
-      if (st && st.mtimeMs < cutoff) await fsp.unlink(p).catch(() => {});
-    });
-    return dirs;
-  };
-  while (todo.length || running.size) {
-    while (running.size < DIR_FANOUT && todo.length) {
-      const d = todo.shift()!;
-      let self!: Promise<{ self: Promise<any>; dirs: string[] }>;
-      self = list(d).then((dirs) => ({ self, dirs }), () => ({ self, dirs: [] as string[] }));
-      running.add(self);
-    }
-    const job = await Promise.race(running);
-    running.delete(job.self);
-    todo.push(...job.dirs);
+// Remove abandoned temporary files (a batch that died mid-way) older than a day. The candidates in a directory
+// are checked together; the walk itself stays sequential so a sweep of a live migration inbox cannot run the
+// server out of CPU while everyone is uploading.
+export async function sweepTemp(root: string, cutoff = Date.now() - 86400_000) {
+  const olds: string[] = [];
+  const dirs: string[] = [];
+  for (const e of await fsp.readdir(root, { withFileTypes: true }).catch(() => [] as fs.Dirent[])) {
+    const p = path.join(root, e.name);
+    if (e.isDirectory()) dirs.push(p);
+    else if (e.name.includes('.bifrost-tmp')) olds.push(p);
   }
+  await mapLimit(olds, STAT_FANOUT, async (p) => {
+    const st = await fsp.stat(p).catch(() => null);
+    if (st && st.mtimeMs < cutoff) await fsp.unlink(p).catch(() => {});
+  });
+  for (const d of dirs) await sweepTemp(d, cutoff);
 }
 
 // Delete an upload's partial file and record.

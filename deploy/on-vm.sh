@@ -25,4 +25,11 @@ tail -3 "$log"
 rm -f "$log"
 docker image prune -f > /dev/null
 sleep 3
-curl -sf --max-time 20 http://127.0.0.1:8080/api/health
+# Give the server a moment to come up, but do not wait for ever: report what it says, and fail if it never does.
+for i in $(seq 1 20); do
+  if out=$(curl -sf --max-time 5 http://127.0.0.1:8080/api/health); then echo "$out"; exit 0; fi
+  sleep 3
+done
+echo "the server did not answer /api/health within a minute of starting"
+docker logs --tail 20 bifrost-bifrost-1 2>&1
+exit 1
