@@ -6,6 +6,9 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+### Fixed
+- A deploy whose container build ran past five minutes was reported as failed while the VM went on to finish it and swap the container, which is how 1.0.4 shipped under a red workflow run. The gateway drops a session that carries nothing for five minutes and the build was piped through `tail`, so it said nothing at all until it was done. The build now runs from `deploy/on-vm.sh`, which keeps the session talking while it works, keeps the build log, and prints it on failure.
+
 ## [1.0.4] - 2026-09-04
 
 ### Fixed

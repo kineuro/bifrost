@@ -69,9 +69,14 @@ jobs:
             IdentitiesOnly yes
             UserKnownHostsFile known_hosts
             StrictHostKeyChecking yes
+            ServerAliveInterval 30
+            ServerAliveCountMax 40
             # -verify_return_error makes openssl hang up on a certificate that does not check out; without it
             # s_client prints the error and carries on, which left the tunnel itself unauthenticated.
             ProxyCommand openssl s_client -quiet -verify_return_error -verify 5 -connect ssh.kineuro.se:443 -servername ssh.kineuro.se 2>/dev/null
           CFG
           rsync -az --delete --exclude node_modules --exclude 'server/public' --exclude 'server/dist' --exclude .git --exclude .env --exclude key --exclude known_hosts --exclude sshcfg --exclude 'cli/bin' -e "ssh -F sshcfg" ./ bifrost:/srv/bifrost/
-          ssh -F sshcfg bifrost "cd /srv/bifrost && BIFROST_VERSION=${{ steps.v.outputs.v }} docker compose up -d --build 2>&1 | tail -3 && docker image prune -f >/dev/null && sleep 3 && curl -s http://127.0.0.1:8080/api/health"
+          # The build itself runs from deploy/on-vm.sh, which keeps the session talking while it works: the
+          # gateway hangs up on five minutes of silence and a long build used to be reported as failed here
+          # while the VM quietly finished it.
+          ssh -F sshcfg bifrost "BIFROST_VERSION=${{ steps.v.outputs.v }} bash /srv/bifrost/deploy/on-vm.sh"
