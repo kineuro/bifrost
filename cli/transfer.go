@@ -469,7 +469,7 @@ func cmdPush(ctx context.Context, args []string) error {
 			req.Files = append(req.Files, m)
 		}
 		var pr planResp
-		if err := c.json(ctx, "POST", "/api/plan", req, &pr); err != nil {
+		if err := retry(ctx, 5, func() error { return c.json(ctx, "POST", "/api/plan", req, &pr) }); err != nil {
 			return fmt.Errorf("plan: %w", err)
 		}
 		for _, h := range pr.Have {
@@ -901,7 +901,7 @@ func cmdPull(ctx context.Context, args []string) error {
 	var man struct {
 		Files []Entry `json:"files"`
 	}
-	if err := c.json(ctx, "GET", "/api/manifest?box=out&path="+url.QueryEscape(o.from), nil, &man); err != nil {
+	if err := retry(ctx, 5, func() error { return c.json(ctx, "GET", "/api/manifest?box=out&path="+url.QueryEscape(o.from), nil, &man) }); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -1466,7 +1466,7 @@ func cmdVerify(ctx context.Context, args []string) error {
 	var man struct {
 		Files []Entry `json:"files"`
 	}
-	if err := c.json(ctx, "GET", "/api/manifest?box="+box+"&path="+url.QueryEscape(prefix), nil, &man); err != nil {
+	if err := retry(ctx, 5, func() error { return c.json(ctx, "GET", "/api/manifest?box="+box+"&path="+url.QueryEscape(prefix), nil, &man) }); err != nil {
 		return err
 	}
 	remote := map[string]Entry{}

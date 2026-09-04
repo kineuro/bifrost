@@ -71,7 +71,46 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 CREATE INDEX IF NOT EXISTS transfers_share ON transfers(share_id, at);
 CREATE INDEX IF NOT EXISTS audit_share ON audit(share_id, at);
+-- What each box holds, kept as it changes rather than counted when asked. Summing the size column over a
+-- bridge means visiting every row it owns, because size is not in the primary key: on the migration bridges
+-- that is millions of rows and tens of seconds, and better-sqlite3 is synchronous, so the whole server waits
+-- for it. The three triggers below keep this in step with the files table, and the question becomes one read.
+CREATE TABLE IF NOT EXISTS usage (
+  share_id TEXT NOT NULL REFERENCES shares(id) ON DELETE CASCADE, box TEXT NOT NULL,
+  bytes INTEGER NOT NULL DEFAULT 0, files INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (share_id, box)
+) WITHOUT ROWID;
 `);
+
+// Filled once from the table it mirrors, then maintained by the triggers. This runs as the module is imported,
+// before the server accepts anything, and this process is the only writer, so nothing can land between the
+// count and the triggers that arm after it. A database that has counters already skips the pass.
+if (!db.prepare('SELECT 1 FROM usage LIMIT 1').get()) recountUsage();
+db.exec(`
+CREATE TRIGGER IF NOT EXISTS files_insert AFTER INSERT ON files BEGIN
+  INSERT INTO usage (share_id, box, bytes, files) VALUES (NEW.share_id, NEW.box, NEW.size, 1)
+    ON CONFLICT (share_id, box) DO UPDATE SET bytes = bytes + NEW.size, files = files + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS files_update AFTER UPDATE OF size ON files BEGIN
+  UPDATE usage SET bytes = bytes - OLD.size + NEW.size WHERE share_id = NEW.share_id AND box = NEW.box;
+END;
+CREATE TRIGGER IF NOT EXISTS files_delete AFTER DELETE ON files BEGIN
+  UPDATE usage SET bytes = bytes - OLD.size, files = files - 1 WHERE share_id = OLD.share_id AND box = OLD.box;
+END;
+`);
+
+// Rebuild the counters from the table they mirror: the one pass on first use, and the way back if they are ever
+// doubted. One pass over the whole files table, grouped, so it costs a scan and not a scan per bridge.
+export function recountUsage() {
+  db.transaction(() => {
+    db.exec('DELETE FROM usage');
+    // Joined to shares rather than grouped alone: a file row whose bridge is gone would fail the foreign key
+    // and take the whole start-up down with it, and a counter rebuild is not the place to discover that.
+    db.exec(`INSERT INTO usage (share_id, box, bytes, files)
+      SELECT f.share_id, f.box, SUM(f.size), COUNT(*) FROM files f JOIN shares s ON s.id = f.share_id
+      GROUP BY f.share_id, f.box`);
+  })();
+}
 
 export const now = () => new Date().toISOString();
 
@@ -91,11 +130,12 @@ export const q = {
   // makes every page an index range scan, so a bridge of millions of files costs no more per page than a small one.
   filesPage: db.prepare<[string, string, string, number], Pick<FileRow, 'path' | 'size' | 'sha256' | 'mtime'>>(
     'SELECT path, size, sha256, mtime FROM files WHERE share_id = ? AND box = ? AND path > ? ORDER BY path LIMIT ?'),
-  filesCount: db.prepare<[string, string], { c: number }>('SELECT COUNT(*) AS c FROM files WHERE share_id = ? AND box = ?'),
+  // What a box holds, from the counters the triggers keep. A bridge that has never received anything has no
+  // row yet, which reads as nothing held.
+  usage: db.prepare<[string, string], { bytes: number; files: number }>('SELECT bytes, files FROM usage WHERE share_id = ? AND box = ?'),
   upsertFile: db.prepare(`INSERT INTO files (share_id, box, path, size, sha256, mtime, credential_id, completed_at) VALUES (?,?,?,?,?,?,?,?)
     ON CONFLICT(share_id, box, path) DO UPDATE SET size=excluded.size, sha256=excluded.sha256, mtime=excluded.mtime, credential_id=excluded.credential_id, completed_at=excluded.completed_at`),
   deleteFile: db.prepare('DELETE FROM files WHERE share_id = ? AND box = ? AND path = ?'),
-  usedBytes: db.prepare<[string], { n: number; c: number }>("SELECT COALESCE(SUM(size),0) AS n, COUNT(*) AS c FROM files WHERE share_id = ? AND box = 'in'"),
   downloaded: db.prepare<[string], { n: number }>("SELECT COALESCE(SUM(bytes),0) AS n FROM transfers WHERE share_id = ? AND kind = 'download'"),
   upload: db.prepare<[string], Upload>('SELECT * FROM uploads WHERE id = ?'),
   uploadFor: db.prepare<[string, string, number, string], Upload>('SELECT * FROM uploads WHERE share_id = ? AND path = ? AND size = ? AND sha256 = ?'),
@@ -112,7 +152,7 @@ export const q = {
 };
 
 export function shareUsage(id: string) {
-  const u = q.usedBytes.get(id)!;
+  const u = q.usage.get(id, 'in');
   const d = q.downloaded.get(id)!;
-  return { used_bytes: u.n, files: u.c, downloaded_bytes: d.n };
+  return { used_bytes: u?.bytes ?? 0, files: u?.files ?? 0, downloaded_bytes: d.n };
 }

@@ -146,9 +146,29 @@ func (c *Client) json(ctx context.Context, method, path string, in any, out any)
 	return json.NewDecoder(res.Body).Decode(out)
 }
 
-// retry runs fn until it succeeds, giving up after attempts; 503 "busy" waits for Retry-After, other errors back off.
+// A server that is not there is not a server that said no. A connection that will not open, or the 502 and 504
+// the gateway answers with while the container behind it is being replaced, means "not yet". Waiting those out
+// on their own budget is what lets a restart pass underneath a running transfer instead of ending it, which is
+// the whole point of a resumable push. The budget is deliberately longer than a rebuild and restart take.
+const unreachableBudget = 5 * time.Minute
+
+// unreachable reports whether err means the server never answered, as opposed to answering with a refusal.
+func unreachable(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var ae *apiError
+	if errors.As(err, &ae) {
+		return ae.Status == 502 || ae.Status == 504
+	}
+	return true // no HTTP reply came back at all: refused, reset, or cut off mid-answer
+}
+
+// retry runs fn until it succeeds, giving up after attempts; 503 "busy" waits for Retry-After, a server that is
+// away waits for it to come back, other errors back off.
 func retry(ctx context.Context, attempts int, fn func() error) error {
 	var last error
+	var awaySince time.Time
 	for i := 0; i < attempts; i++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -177,6 +197,24 @@ func retry(ctx context.Context, attempts int, fn func() error) error {
 				i-- // being told to wait is not a failure
 				continue
 			}
+		}
+		if unreachable(err) {
+			if awaySince.IsZero() {
+				awaySince = time.Now()
+			}
+			if time.Since(awaySince) < unreachableBudget {
+				const d = 5 * time.Second
+				busy(d) // hold every worker off, so a server coming back is not met by all of them at once
+				select {
+				case <-time.After(d):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				i-- // waiting for the server to come back is not an attempt spent
+				continue
+			}
+		} else {
+			awaySince = time.Time{}
 		}
 		d := time.Duration(1<<uint(i)) * time.Second
 		if d > 30*time.Second {
@@ -228,7 +266,7 @@ type shareResp struct {
 
 func (c *Client) share(ctx context.Context) (*shareResp, error) {
 	var s shareResp
-	if err := c.json(ctx, "GET", "/api/share", nil, &s); err != nil {
+	if err := retry(ctx, 5, func() error { return c.json(ctx, "GET", "/api/share", nil, &s) }); err != nil {
 		return nil, err
 	}
 	return &s, nil

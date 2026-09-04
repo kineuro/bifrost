@@ -154,7 +154,7 @@ admin.get('/shares/:id/manifest', (c) => {
       for (const r of page) yield r;
     }
   }
-  return c.body(lines(rows()), 200, { ...NDJSON, 'x-bifrost-files': String(q.filesCount.get(s.id, box)?.c ?? 0) });
+  return c.body(lines(rows()), 200, { ...NDJSON, 'x-bifrost-files': String(q.usage.get(s.id, box)?.files ?? 0) });
 });
 admin.get('/shares/:id/activity', (c) => {
   const s = q.share.get(c.req.param('id')); if (!s) throw new HttpError(404, 'no such bridge');

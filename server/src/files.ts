@@ -96,10 +96,8 @@ export async function sha256File(abs: string): Promise<string> {
 
 // Quota checks for an inbox.
 export function checkQuota(share: Share, addBytes: number, addFiles: number) {
-  // A bridge with neither limit set has nothing to check, and asking anyway is not free: the usage query sums
-  // `size` over every row the bridge owns, and `size` is not in the primary key, so SQLite visits the table row
-  // by row. On the migration bridges that is six and a half million rows and four and a half seconds, run
-  // synchronously, on the event loop, for every plan a push sends. It is why the server kept going quiet.
+  // A bridge with neither limit set has nothing to check. Asking is a single row read now that the counters
+  // are kept as files arrive, but there is still no reason to ask.
   if (share.quota_bytes <= 0 && share.max_files <= 0) return;
   const u = shareUsage(share.id);
   if (share.quota_bytes > 0 && u.used_bytes + addBytes > share.quota_bytes) throw new HttpError(507, `over quota: ${fmt(share.quota_bytes - u.used_bytes)} left of ${fmt(share.quota_bytes)}`);
