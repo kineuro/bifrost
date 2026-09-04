@@ -5,6 +5,16 @@ import { streams } from './files.js';
 class Counter { v = 0; inc(n = 1) { this.v += n; } }
 export const metrics = { bytesIn: new Counter(), bytesOut: new Counter(), requests: new Counter(), errors: new Counter(), busy: new Counter(), aborted: new Counter() };
 
+// What a bridge holds is a sum of `size` over every row it owns, and better-sqlite3 is synchronous, so asking
+// costs the event loop the whole query: on the migration bridges that was around seven seconds. Prometheus
+// scrapes every thirty seconds, so the monitoring was freezing the server it was watching and then reporting it
+// as unreachable. The numbers are refreshed on a slow timer instead, off the request path, and a scrape reads
+// whatever the last refresh left behind.
+const usedBytesCache = new Map<string, number>();
+export function refreshUsage() {
+  for (const sh of q.shares.all()) usedBytesCache.set(sh.id, shareUsage(sh.id).used_bytes);
+}
+
 export function render(): string {
   const lines: string[] = [];
   const g = (name: string, help: string, type: string, rows: [Record<string, string>, number][]) => {
@@ -27,8 +37,8 @@ export function render(): string {
   g('bifrost_bridges', 'Bridges by status', 'gauge', ['open', 'frozen', 'accepted', 'closed'].map((st) => [{ status: st }, shares.filter((x) => x.status === st).length]));
   const rows: [Record<string, string>, number][] = [], quota: [Record<string, string>, number][] = [], exp: [Record<string, string>, number][] = [];
   for (const sh of shares) {
-    const u = shareUsage(sh.id);
-    rows.push([{ bridge: sh.id }, u.used_bytes]);
+    const used = usedBytesCache.get(sh.id);
+    if (used !== undefined) rows.push([{ bridge: sh.id }, used]);
     if (sh.quota_bytes) quota.push([{ bridge: sh.id }, sh.quota_bytes]);
     if (sh.expires_at) exp.push([{ bridge: sh.id }, Math.floor(new Date(sh.expires_at).getTime() / 1000)]);
   }

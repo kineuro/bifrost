@@ -12,7 +12,7 @@ import { pub } from './api/public.js';
 import { config } from './config.js';
 import { audit, db, now, q } from './db.js';
 import { dropUpload, HttpError, removeShareData, sweepTemp } from './files.js';
-import { metrics, render } from './metrics.js';
+import { metrics, refreshUsage, render } from './metrics.js';
 import { notify } from './notify.js';
 import { handleTus } from './tus.js';
 
@@ -133,6 +133,9 @@ const runHousekeeping = (sweep: boolean) => {
   housekeepingRunning = true;
   housekeeping(sweep).catch((e) => console.error(now(), 'housekeeping', e)).finally(() => { housekeepingRunning = false; });
 };
+// The per-bridge byte totals for /metrics, refreshed away from the scrape. Ten minutes is far finer than the
+// alerts that read them need, and the first pass waits until the server has finished coming up.
+setTimeout(() => { refreshUsage(); setInterval(refreshUsage, 600_000).unref(); }, 30_000).unref();
 setInterval(() => runHousekeeping(false), 3600_000);
 // Deleting day-old scraps is a daily job, and on a migration inbox it is a walk of millions of directories: doing
 // it hourly, and once more every time the server starts, spent far more of the exchange than it ever reclaimed.
