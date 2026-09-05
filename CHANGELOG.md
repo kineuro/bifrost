@@ -6,6 +6,13 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+### Fixed
+- A push no longer holds the whole study in memory. It indexed the entire tree first, keeping each file's path twice over (once relative, once absolute) plus a map across every one of them, then planned all of it, then sent it: about 1.4 kB a file, so a few million files cost gigabytes. On 5 September the Synology's kernel killed a three day multiple_ms push at 6.9 GB of 7.9, on its third of four attempts, and the study came within one attempt of being abandoned. The tree is now counted once for the totals the progress line needs, then walked, planned and sent one chunk of 200,000 files at a time, with the walk running a single chunk ahead of the transfer. Only the relative path is kept and the absolute one is rebuilt when a file is opened; the map from remote path back to file is built per plan request, which is the only place an answer is ever read, instead of across the study. Measured on a tree of the same shape: 900,000 files went from 1,226 MB resident to 288 MB, and 300,000 from 455 MB to 158 MB. What a push holds no longer follows how large the study is, and a soft memory limit of 1 GiB keeps the garbage collector from drifting above it (`GOMEMLIMIT` still wins if it is set).
+- The walk spawned a goroutine for every directory it discovered and let them queue for one of sixteen turns, so a wide tree carried tens of thousands of stacks it was not using. A fixed pool of sixteen takes directories off a queue instead.
+
+### Changed
+- `bifrost push --json` writes one `plan` event per chunk rather than one for the whole tree, and `total_files` and `total_bytes` in the progress events start at the size of the tree and come down as each plan reports what the bridge already holds. A first push therefore has its totals from the outset; a resume settles onto the smaller figure as it plans. The human-readable summary of what was already there and what was left to send now prints when the transfer ends rather than before it starts, because that is when a streaming push knows it.
+
 ## [1.0.5] - 2026-09-04
 
 ### Fixed

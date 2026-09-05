@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -108,74 +109,186 @@ func excluded(rel string, globs []string) bool {
 // ---- local index -----------------------------------------------------------------------------------------------------------
 
 type localFile struct {
-	rel   string // forward slashes, relative to the root
-	abs   string
-	size  int64
-	mtime time.Time
-	sha   string
+	rel  string // forward slashes, relative to the root
+	size int64
+	sha  string
 }
 
-// index walks root with several goroutines (directories are the unit of work) and returns files sorted by path.
-func index(ctx context.Context, root string, globs []string, prog *progress) ([]localFile, error) {
+// abs rebuilds the path on disk. Only the relative path is kept: the absolute one is the same root repeated
+// once per file, and over a few million of them that duplication was gigabytes of a push. Rebuilding it costs
+// one join, and only at the moment a file is opened.
+func (f *localFile) abs(root string) string { return filepath.Join(root, filepath.FromSlash(f.rel)) }
+
+// walkFiles reads the tree under root with a fixed pool of workers (a directory is the unit of work) and sends
+// every regular file to out, closing it when the tree is exhausted. It keeps only the directories it has still
+// to visit, so the caller alone decides how much of the tree is in memory at once. The pool is fixed rather
+// than a goroutine per directory: a wide tree used to spawn one for every directory it discovered, and each sat
+// on its stack waiting for a turn.
+func walkFiles(ctx context.Context, root string, globs []string, prog *progress, out chan<- localFile) error {
+	defer close(out)
 	st, err := os.Stat(root)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if !st.IsDir() {
-		return []localFile{{rel: filepath.Base(root), abs: root, size: st.Size(), mtime: st.ModTime()}}, nil
-	}
-	var mu sync.Mutex
-	var out []localFile
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 16)
-	var walk func(dir, rel string)
-	walk = func(dir, rel string) {
-		defer wg.Done()
-		sem <- struct{}{}
-		ents, err := os.ReadDir(dir)
-		<-sem
-		if err != nil {
-			prog.warn(fmt.Sprintf("cannot read %s: %v", dir, err))
-			return
+		select {
+		case out <- localFile{rel: filepath.Base(root), size: st.Size()}:
+		case <-ctx.Done():
 		}
-		for _, e := range ents {
-			if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	type dir struct{ path, rel string }
+	var mu sync.Mutex
+	cond := sync.NewCond(&mu)
+	queue := []dir{{root, ""}}
+	outstanding := 1 // directories taken from the queue or still on it, so an empty queue is not yet the end
+	var n int64
+	work := func() {
+		for {
+			mu.Lock()
+			for len(queue) == 0 && outstanding > 0 {
+				cond.Wait()
+			}
+			if len(queue) == 0 {
+				mu.Unlock()
 				return
 			}
-			name := e.Name()
-			r := name
-			if rel != "" {
-				r = rel + "/" + name
+			d := queue[len(queue)-1]
+			queue = queue[:len(queue)-1]
+			mu.Unlock()
+
+			ents, err := os.ReadDir(d.path)
+			if err != nil {
+				prog.warn(fmt.Sprintf("cannot read %s: %v", d.path, err))
 			}
-			if excluded(r, globs) {
-				continue
-			}
-			if e.IsDir() {
-				wg.Add(1)
-				go walk(filepath.Join(dir, name), r)
-				continue
-			}
-			if e.Type()&os.ModeSymlink != 0 {
-				continue
-			}
-			info, err := e.Info()
-			if err != nil || !info.Mode().IsRegular() {
-				continue
+			var subs []dir
+			for _, e := range ents {
+				if ctx.Err() != nil {
+					break
+				}
+				name := e.Name()
+				r := name
+				if d.rel != "" {
+					r = d.rel + "/" + name
+				}
+				if excluded(r, globs) {
+					continue
+				}
+				if e.IsDir() {
+					subs = append(subs, dir{filepath.Join(d.path, name), r})
+					continue
+				}
+				if e.Type()&os.ModeSymlink != 0 {
+					continue
+				}
+				info, err := e.Info()
+				if err != nil || !info.Mode().IsRegular() {
+					continue
+				}
+				select {
+				case out <- localFile{rel: r, size: info.Size()}:
+				case <-ctx.Done():
+				}
+				if c := atomic.AddInt64(&n, 1); c%1000 == 0 {
+					prog.note(fmt.Sprintf("indexing: %d files", c))
+				}
 			}
 			mu.Lock()
-			out = append(out, localFile{rel: r, abs: filepath.Join(dir, name), size: info.Size(), mtime: info.ModTime()})
-			n := len(out)
-			mu.Unlock()
-			if n%1000 == 0 {
-				prog.note(fmt.Sprintf("indexing: %d files", n))
+			queue = append(queue, subs...)
+			outstanding += len(subs) - 1 // this directory is finished, its children are not
+			if outstanding == 0 {
+				cond.Broadcast()
+			} else {
+				cond.Signal()
 			}
+			mu.Unlock()
 		}
 	}
-	wg.Add(1)
-	go walk(root, "")
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); work() }()
+	}
 	wg.Wait()
+	return ctx.Err()
+}
+
+// index collects the whole tree at once, for the commands that have to hold it against something else entire.
+func index(ctx context.Context, root string, globs []string, prog *progress) ([]localFile, error) {
+	files := make(chan localFile, 4096)
+	errc := make(chan error, 1)
+	go func() { errc <- walkFiles(ctx, root, globs, prog, files) }()
+	var out []localFile
+	for f := range files {
+		out = append(out, f)
+	}
+	if err := <-errc; err != nil {
+		return nil, err
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].rel < out[j].rel })
 	return out, ctx.Err()
+}
+
+// indexChunks hands the tree on in chunks of about n files, sorted within each chunk. The channel it writes to
+// holds one chunk, so the walk runs a chunk ahead of the transfer and no further: what a push costs in memory
+// stops depending on how large the study is.
+func indexChunks(ctx context.Context, root string, globs []string, n int, prog *progress, out chan<- []localFile) error {
+	defer close(out)
+	files := make(chan localFile, 4096)
+	errc := make(chan error, 1)
+	go func() { errc <- walkFiles(ctx, root, globs, prog, files) }()
+	buf := make([]localFile, 0, n)
+	flush := func() bool {
+		if len(buf) == 0 {
+			return true
+		}
+		sort.Slice(buf, func(i, j int) bool { return buf[i].rel < buf[j].rel })
+		select {
+		case out <- buf:
+			buf = make([]localFile, 0, n)
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	for f := range files {
+		buf = append(buf, f)
+		if len(buf) < n {
+			continue
+		}
+		if !flush() {
+			break
+		}
+	}
+	for range files { // if we stopped early, let the walk finish rather than leave it blocked on a send
+	}
+	if err := <-errc; err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !flush() {
+		return ctx.Err()
+	}
+	return nil
+}
+
+// count walks the tree without keeping any of it, for the totals the progress line needs before the first byte
+// moves. It costs a second pass over the directories, which is metadata only and leaves them warm in the cache
+// for the walk that follows; without it a streaming push would not know what it was counting down to.
+func count(ctx context.Context, root string, globs []string, prog *progress) (files, bytes int64, err error) {
+	ch := make(chan localFile, 4096)
+	errc := make(chan error, 1)
+	go func() { errc <- walkFiles(ctx, root, globs, prog, ch) }()
+	for f := range ch {
+		files++
+		bytes += f.size
+	}
+	if e := <-errc; e != nil {
+		return 0, 0, e
+	}
+	return files, bytes, ctx.Err()
 }
 
 func sha256File(p string) (string, error) {
@@ -208,6 +321,16 @@ type progress struct {
 }
 
 func newProgress(jsonOut bool) *progress { return &progress{jsonOut: jsonOut, start: time.Now()} }
+
+// addTotals moves what the progress line counts down to. A streaming push starts from the whole tree and gives
+// back what each plan reports the bridge already holds, so the figure is right from the first byte on a fresh
+// push and settles onto the smaller one as a resume is planned.
+func (p *progress) addTotals(files, bytes int64) {
+	p.mu.Lock()
+	p.totalFiles += files
+	p.totalBytes += bytes
+	p.mu.Unlock()
+}
 func (p *progress) add(bytes int64, files int64) {
 	atomic.AddInt64(&p.bytes, bytes)
 	atomic.AddInt64(&p.done, files)
@@ -378,6 +501,66 @@ type planResp struct {
 	Limits Limits `json:"limits"`
 }
 
+// resume is what the bridge remembers of a large file whose upload was cut short.
+type resume struct {
+	id    string
+	parts []int
+}
+
+// planFile is one entry of a plan request. It is a struct rather than a map because a plan asks about twenty
+// thousand files at a time and a map per file was a real share of a large push's allocations.
+type planFile struct {
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	Sha256 string `json:"sha256,omitempty"`
+}
+
+// planChunk asks the bridge which of these files it already holds and returns the ones still to send, with any
+// large file it can resume and the size of what is already there. The map from remote path back to the file is
+// built per request rather than over the whole tree: an answer only ever names paths from the request it
+// answers, so a map across every file in the study bought nothing and cost a gigabyte on the large ones.
+func planChunk(ctx context.Context, c *Client, files []localFile, remote func(string) string, prog *progress) ([]*localFile, map[string]resume, int64, error) {
+	var missing []*localFile
+	res := map[string]resume{}
+	var have int64
+	for i := 0; i < len(files); i += 20000 {
+		end := i + 20000
+		if end > len(files) {
+			end = len(files)
+		}
+		slice := files[i:end]
+		byRemote := make(map[string]*localFile, len(slice))
+		req := struct {
+			Files []planFile `json:"files"`
+		}{Files: make([]planFile, 0, len(slice))}
+		for j := range slice {
+			p := remote(slice[j].rel)
+			byRemote[p] = &slice[j]
+			req.Files = append(req.Files, planFile{Path: p, Size: slice[j].size, Sha256: slice[j].sha})
+		}
+		var pr planResp
+		if err := retry(ctx, 5, func() error { return c.json(ctx, "POST", "/api/plan", req, &pr) }); err != nil {
+			return nil, nil, 0, fmt.Errorf("plan: %w", err)
+		}
+		for _, h := range pr.Have {
+			if f := byRemote[h]; f != nil {
+				have += f.size
+			}
+		}
+		for _, m := range pr.Missing {
+			if f := byRemote[m.Path]; f != nil {
+				missing = append(missing, f)
+			} else {
+				prog.warn("plan returned a path we did not send: " + m.Path)
+			}
+		}
+		for _, r := range pr.Resumable {
+			res[r.Path] = resume{r.UploadID, r.PartsDone}
+		}
+	}
+	return missing, res, have, nil
+}
+
 func cmdPush(ctx context.Context, args []string) error {
 	o, err := parseOpts(args)
 	if err != nil {
@@ -404,13 +587,6 @@ func cmdPush(ctx context.Context, args []string) error {
 	}
 	prog := newProgress(o.jsonOut)
 	abs, _ := filepath.Abs(src)
-	files, err := index(ctx, abs, o.excludes, prog)
-	if err != nil {
-		return err
-	}
-	if len(files) == 0 {
-		return errors.New("nothing to send")
-	}
 	prefix := o.to
 	if prefix == "" {
 		if st, _ := os.Stat(abs); st != nil && st.IsDir() {
@@ -438,102 +614,135 @@ func cmdPush(ctx context.Context, args []string) error {
 		}
 		return prefix + "/" + rel
 	}
-	if o.checksum {
-		prog.note("hashing local files")
-		hashAll(ctx, files, 8)
+	// A push used to index the whole tree, then plan all of it, then send it: every path was held twice over,
+	// with a map across all of them on top, so a study of a few million files cost gigabytes. That is what the
+	// Synology's kernel killed a three day multiple_ms push for on 2026-09-05, at 6.9 GB on a 7.9 GB machine.
+	// The tree is now counted once, then walked, planned and sent one chunk at a time, and the walk runs a
+	// single chunk ahead of the transfer. What a push holds no longer follows how large the study is.
+	const chunkFiles = 200_000
+	// Go sizes its heap against how fast a program allocates, and walking several million paths allocates fast
+	// even when almost none of it is kept, so resident memory drifted far above what was actually held. A soft
+	// limit turns that drift into more frequent collection instead of more pages. It sits well above what a
+	// chunk needs, so it costs nothing on an ordinary push, and GOMEMLIMIT still wins if an operator sets one.
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(1 << 30)
 	}
-	// Plan in slices of 20k so the request stays small.
-	byRemote := map[string]*localFile{}
-	for i := range files {
-		byRemote[remote(files[i].rel)] = &files[i]
+	indexedFiles, indexedBytes, err := count(ctx, abs, o.excludes, prog)
+	if err != nil {
+		return err
 	}
-	var missing []*localFile
-	resumable := map[string]struct {
-		id    string
-		parts []int
-	}{}
-	var haveBytes int64
-	for i := 0; i < len(files); i += 20000 {
-		end := i + 20000
-		if end > len(files) {
-			end = len(files)
-		}
-		req := struct {
-			Files []map[string]any `json:"files"`
-		}{}
-		for _, f := range files[i:end] {
-			m := map[string]any{"path": remote(f.rel), "size": f.size}
-			if f.sha != "" {
-				m["sha256"] = f.sha
-			}
-			req.Files = append(req.Files, m)
-		}
-		var pr planResp
-		if err := retry(ctx, 5, func() error { return c.json(ctx, "POST", "/api/plan", req, &pr) }); err != nil {
-			return fmt.Errorf("plan: %w", err)
-		}
-		for _, h := range pr.Have {
-			if f := byRemote[h]; f != nil {
-				haveBytes += f.size
-			}
-		}
-		for _, m := range pr.Missing {
-			if f := byRemote[m.Path]; f != nil {
-				missing = append(missing, f)
-			} else {
-				prog.warn("plan returned a path we did not send: " + m.Path)
-			}
-		}
-		for _, r := range pr.Resumable {
-			resumable[r.Path] = struct {
-				id    string
-				parts []int
-			}{r.UploadID, r.PartsDone}
-		}
+	if indexedFiles == 0 {
+		return errors.New("nothing to send")
 	}
-	var total int64
-	for _, f := range missing {
-		total += f.size
-	}
-	prog.totalBytes, prog.totalFiles = total, int64(len(missing))
-	prog.event(map[string]any{"event": "plan", "files": len(files), "already_there": len(files) - len(missing), "to_send": len(missing), "bytes": total})
 	if !o.jsonOut {
-		fmt.Fprintf(os.Stderr, "\r\033[K%d files indexed; %d already on the bridge (%s); %d to send (%s); %d streams\n", len(files), len(files)-len(missing), fmtBytes(haveBytes), len(missing), fmtBytes(total), o.workers)
+		fmt.Fprintf(os.Stderr, "\r\033[K%d files indexed (%s); %d streams\n", indexedFiles, fmtBytes(indexedBytes), o.workers)
+	}
+	// The progress line counts down to the whole tree and is given back whatever each plan says the bridge
+	// already holds, so a first push knows its total from the start and a resume settles onto the smaller one.
+	prog.addTotals(indexedFiles, indexedBytes)
+
+	walkCtx, stopWalk := context.WithCancel(ctx)
+	defer stopWalk()
+	chunks := make(chan []localFile, 1)
+	walkErr := make(chan error, 1)
+	go func() { walkErr <- indexChunks(walkCtx, abs, o.excludes, chunkFiles, prog, chunks) }()
+
+	rl := newLimiter(o.limit)
+	sem := make(streamSem, o.workers)
+	jobs := make(chan func() error)
+	poolErr := make(chan error, 1)
+	go func() { poolErr <- runPool(ctx, o.workers, jobs) }()
+	send := func(j func() error) bool {
+		select {
+		case jobs <- j:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	var alreadyThere, toSend, sendBytes, haveBytes int64
+	var planErr error
+	for chunk := range chunks {
+		if o.checksum {
+			prog.note("hashing local files")
+			hashAll(ctx, abs, chunk, 8)
+		}
+		missing, resumable, have, err := planChunk(ctx, c, chunk, remote, prog)
+		if err != nil {
+			planErr = err
+			break
+		}
+		var chunkBytes int64
+		for _, f := range missing {
+			chunkBytes += f.size
+		}
+		present := int64(len(chunk) - len(missing))
+		alreadyThere += present
+		toSend += int64(len(missing))
+		sendBytes += chunkBytes
+		haveBytes += have
+		prog.addTotals(-present, -have)
+		prog.event(map[string]any{"event": "plan", "files": len(chunk), "already_there": present, "to_send": len(missing), "bytes": chunkBytes})
+		if o.dryRun {
+			for _, f := range missing {
+				fmt.Println(remote(f.rel), f.size)
+			}
+			continue
+		}
+		// Large files first within the chunk, because they take the longest; the batches behind them keep the
+		// rest of the streams busy while they run.
+		var small []*localFile
+		stop := false
+		for _, f := range missing {
+			if f.size < lim.LargeFile {
+				small = append(small, f)
+				continue
+			}
+			f, r := f, resumable[remote(f.rel)]
+			if !send(func() error {
+				return pushLarge(ctx, c, abs, f, remote(f.rel), lim, r.id, r.parts, rl, prog, o.workers, sem)
+			}) {
+				stop = true
+				break
+			}
+		}
+		if !stop {
+			for _, b := range makeBatches(small, lim.BatchBytes, lim.BatchFiles) {
+				b := b
+				if !send(func() error { return pushBatch(ctx, c, abs, b, remote, rl, prog, sem) }) {
+					stop = true
+					break
+				}
+			}
+		}
+		if stop {
+			break
+		}
+	}
+	// Whatever ended the loop, the walk is told to stop and drained: leaving it blocked on a send would leave
+	// its error unread and this function waiting on it forever.
+	stopWalk()
+	for range chunks {
+	}
+	<-walkErr
+	close(jobs)
+	err = <-poolErr
+	if planErr != nil {
+		return planErr
 	}
 	if o.dryRun {
-		for _, f := range missing {
-			fmt.Println(remote(f.rel), f.size)
-		}
 		return nil
 	}
-	if len(missing) == 0 {
+	if toSend == 0 {
 		prog.finish("nothing to send; everything is already on the bridge")
 		return nil
 	}
-	rl := newLimiter(o.limit)
-	// Split: large files as parts, the rest as batches.
-	var large, small []*localFile
-	for _, f := range missing {
-		if f.size >= lim.LargeFile {
-			large = append(large, f)
-		} else {
-			small = append(small, f)
-		}
+	if !o.jsonOut {
+		// What the plans came back with, not what went over the wire: an interrupted push has planned more
+		// than it sent, and the closing line below is the one that says how much actually arrived.
+		fmt.Fprintf(os.Stderr, "\r\033[Kplanned: %d already on the bridge (%s), %d to send (%s)\n", alreadyThere, fmtBytes(haveBytes), toSend, fmtBytes(sendBytes))
 	}
-	batches := makeBatches(small, lim.BatchBytes, lim.BatchFiles)
-	sem := make(streamSem, o.workers)
-	var jobs []func() error
-	for _, b := range batches {
-		b := b
-		jobs = append(jobs, func() error { return pushBatch(ctx, c, b, remote, rl, prog, sem) })
-	}
-	for _, f := range large {
-		f := f
-		r := resumable[remote(f.rel)]
-		jobs = append(jobs, func() error { return pushLarge(ctx, c, f, remote(f.rel), lim, r.id, r.parts, rl, prog, o.workers, sem) })
-	}
-	// Large files first (they need the most time), then batches; a worker pool runs them.
-	err = runPool(ctx, o.workers, jobs)
 	failed := atomic.LoadInt64(&prog.failed)
 	_ = c.json(ctx, "POST", "/api/upload/done", map[string]any{"files": atomic.LoadInt64(&prog.done), "bytes": atomic.LoadInt64(&prog.bytes)}, nil)
 	if err != nil && ctx.Err() != nil {
@@ -547,7 +756,7 @@ func cmdPush(ctx context.Context, args []string) error {
 	return nil
 }
 
-func hashAll(ctx context.Context, files []localFile, workers int) {
+func hashAll(ctx context.Context, root string, files []localFile, workers int) {
 	var wg sync.WaitGroup
 	ch := make(chan int)
 	for i := 0; i < workers; i++ {
@@ -555,7 +764,7 @@ func hashAll(ctx context.Context, files []localFile, workers int) {
 		go func() {
 			defer wg.Done()
 			for i := range ch {
-				if s, err := sha256File(files[i].abs); err == nil {
+				if s, err := sha256File(files[i].abs(root)); err == nil {
 					files[i].sha = s
 				}
 			}
@@ -605,9 +814,10 @@ func (s streamSem) acquire(ctx context.Context) error {
 }
 func (s streamSem) release() { <-s }
 
-func runPool(ctx context.Context, workers int, jobs []func() error) error {
+// runPool runs jobs taken from ch on a fixed number of workers, until ch is closed. The caller owns ch and
+// closes it, which is what lets a push feed the pool as it walks instead of building every job in advance.
+func runPool(ctx context.Context, workers int, ch <-chan func() error) error {
 	var wg sync.WaitGroup
-	ch := make(chan func() error)
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -631,22 +841,28 @@ func runPool(ctx context.Context, workers int, jobs []func() error) error {
 			}
 		}()
 	}
-	for _, j := range jobs {
-		if ctx.Err() != nil {
-			break
-		}
-		select {
-		case ch <- j:
-		case <-ctx.Done():
-		}
-	}
-	close(ch)
 	wg.Wait()
 	return ctx.Err()
 }
 
+// runPoolSlice feeds a list of jobs that is already complete through the pool.
+func runPoolSlice(ctx context.Context, workers int, jobs []func() error) error {
+	ch := make(chan func() error)
+	go func() {
+		defer close(ch)
+		for _, j := range jobs {
+			select {
+			case ch <- j:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return runPool(ctx, workers, ch)
+}
+
 // pushBatch streams one tar.zst of small files; the server answers with what it wrote and its hashes.
-func pushBatch(ctx context.Context, c *Client, files []*localFile, remote func(string) string, rl *limiter, prog *progress, sem streamSem) error {
+func pushBatch(ctx context.Context, c *Client, root string, files []*localFile, remote func(string) string, rl *limiter, prog *progress, sem streamSem) error {
 	var bytesDeclared int64
 	for _, f := range files {
 		bytesDeclared += f.size
@@ -668,7 +884,7 @@ func pushBatch(ctx context.Context, c *Client, files []*localFile, remote func(s
 					werr = ctx.Err()
 					break
 				}
-				fh, err := os.Open(f.abs)
+				fh, err := os.Open(f.abs(root))
 				if err != nil {
 					prog.fail(f.rel, err)
 					continue
@@ -748,10 +964,10 @@ func pushBatch(ctx context.Context, c *Client, files []*localFile, remote func(s
 }
 
 // pushLarge sends one big file as parts, several in flight, then asks the server to verify and place it.
-func pushLarge(ctx context.Context, c *Client, f *localFile, rpath string, lim Limits, resumeID string, done []int, rl *limiter, prog *progress, workers int, sem streamSem) error {
+func pushLarge(ctx context.Context, c *Client, root string, f *localFile, rpath string, lim Limits, resumeID string, done []int, rl *limiter, prog *progress, workers int, sem streamSem) error {
 	if f.sha == "" {
 		prog.note("hashing " + f.rel)
-		s, err := sha256File(f.abs)
+		s, err := sha256File(f.abs(root))
 		if err != nil {
 			prog.fail(f.rel, err)
 			return err
@@ -806,7 +1022,7 @@ func pushLarge(ctx context.Context, c *Client, f *localFile, rpath string, lim L
 						return err
 					}
 					defer sem.release()
-					fh, err := os.Open(f.abs)
+					fh, err := os.Open(f.abs(root))
 					if err != nil {
 						return err
 					}
@@ -901,7 +1117,9 @@ func cmdPull(ctx context.Context, args []string) error {
 	var man struct {
 		Files []Entry `json:"files"`
 	}
-	if err := retry(ctx, 5, func() error { return c.json(ctx, "GET", "/api/manifest?box=out&path="+url.QueryEscape(o.from), nil, &man) }); err != nil {
+	if err := retry(ctx, 5, func() error {
+		return c.json(ctx, "GET", "/api/manifest?box=out&path="+url.QueryEscape(o.from), nil, &man)
+	}); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -983,7 +1201,7 @@ func cmdPull(ctx context.Context, args []string) error {
 		e := e
 		jobs = append(jobs, func() error { return pullLarge(ctx, c, e, localPath(e.Path), lim, rl, prog, o.workers) })
 	}
-	err = runPool(ctx, o.workers, jobs)
+	err = runPoolSlice(ctx, o.workers, jobs)
 	failed := atomic.LoadInt64(&prog.failed)
 	_ = c.json(ctx, "POST", "/api/download/done", map[string]any{"files": atomic.LoadInt64(&prog.done), "bytes": atomic.LoadInt64(&prog.bytes)}, nil)
 	if err != nil && ctx.Err() != nil {
@@ -1462,11 +1680,13 @@ func cmdVerify(ctx context.Context, args []string) error {
 		return err
 	}
 	prog.note("hashing local files")
-	hashAll(ctx, files, 8)
+	hashAll(ctx, abs, files, 8)
 	var man struct {
 		Files []Entry `json:"files"`
 	}
-	if err := retry(ctx, 5, func() error { return c.json(ctx, "GET", "/api/manifest?box="+box+"&path="+url.QueryEscape(prefix), nil, &man) }); err != nil {
+	if err := retry(ctx, 5, func() error {
+		return c.json(ctx, "GET", "/api/manifest?box="+box+"&path="+url.QueryEscape(prefix), nil, &man)
+	}); err != nil {
 		return err
 	}
 	remote := map[string]Entry{}
