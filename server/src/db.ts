@@ -32,6 +32,12 @@ export interface Upload {
 
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 export const db = new Database(config.dbPath);
+// The lock is held for the life of the process rather than taken and released around every statement. On an
+// NFS mount the release is what costs: before the kernel lets a lock go it flushes and commits the file, on the
+// thread that asked, and here that thread is the event loop, so every file recorded stalled the whole server for
+// a round trip to Midgard. One process owns this database, so nothing is given up by keeping the lock, and in
+// WAL mode an exclusive lock also keeps the wal-index in memory instead of in an mmap'd -shm file on the mount.
+db.pragma('locking_mode = EXCLUSIVE');
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.pragma('foreign_keys = ON');
@@ -150,6 +156,12 @@ export const q = {
   auditAll: db.prepare<[number], { id: number; at: string; actor: string; action: string; share_id: string; detail: string }>('SELECT * FROM audit ORDER BY at DESC LIMIT ?'),
   touchCred: db.prepare('UPDATE credentials SET last_used_at = ?, last_ip = ? WHERE id = ?'),
 };
+
+// A batch's files recorded in one transaction: one lock cycle and one WAL append for the batch instead of one
+// per file.
+export const upsertFiles = db.transaction((rows: [string, Box, string, number, string, string | null, string, string][]) => {
+  for (const r of rows) q.upsertFile.run(...r);
+});
 
 export function shareUsage(id: string) {
   const u = q.usage.get(id, 'in');

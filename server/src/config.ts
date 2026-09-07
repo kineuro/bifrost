@@ -30,6 +30,11 @@ export const config = {
   batchFiles: num('BATCH_FILES', 5000),
   maxStreams: num('MAX_STREAMS', 48),                  // global concurrent transfer streams
   maxStreamsPerClient: num('MAX_STREAMS_PER_CLIENT', 8),
+  // How a tar batch is unpacked: this many files written at once, holding at most this much of the batch in
+  // memory while they are. 1 writes them one after another, as the batch arrives. Measured 2026-09-07 on the
+  // exchange with sync=disabled: 4, 8 and 16 all landed at 3,300 files/s against 1,900 for one at a time.
+  batchParallel: num('BATCH_PARALLEL', 8),
+  batchBuffer: num('BATCH_BUFFER', 64 * 1024 * 1024),
   sessionHours: num('SESSION_HOURS', 12),
   // Where the Alertmanager lives, for Teams notifications (empty = off).
   alertmanager: env('ALERTMANAGER_URL', ''),
