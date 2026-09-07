@@ -6,6 +6,14 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-07
+
+### Fixed
+- The server no longer stalls every transfer on its own database. Each received file was recorded with a statement that took and released a lock on the database file, which lives on the exchange mount, and on NFS a lock release makes the kernel flush and commit the file first, on the thread that asked: here the event loop. With two studies pushing over 48 streams the loop spent 85% of its time in that wait and the bridge took about 55 files a second whatever the number of streams; a single stream would have done nearly as well. The lock is now held for the life of the process (one process owns the database, and in WAL mode this also keeps the wal-index in memory instead of in a mapped file on the mount), and a batch's files are recorded in one transaction at the end rather than one statement each.
+
+### Changed
+- A tar batch is unpacked several files at a time. Each entry is read into memory as it arrives and handed to a writer, up to `BATCH_PARALLEL` of them at once (default 8) holding at most `BATCH_BUFFER` bytes (default 64 MB); the tar is asked for the next entry only when there is room, which is what holds the sender back. A file is one write call instead of a run of them, a batch makes each directory once, and an entry too big to hold streams straight to disk as before. Measured on a four core VM against a copy of the exchange dataset with `sync=disabled`, 118,479 DICOM files of 94 kB on average over 24 streams: one file at a time 1,900 files a second, eight at a time 3,300, four and sixteen the same as eight; a thread pool of 32 was slower than 8. With the dataset at `sync=standard` the same code reaches 125 files a second, because every stable metadata operation the NFS server must answer is a synchronous write to the pool's disks: the dataset setting, not the code, decides the other twenty-fold.
+
 ## [1.1.0] - 2026-09-05
 
 ### Fixed

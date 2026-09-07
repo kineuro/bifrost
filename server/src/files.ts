@@ -8,7 +8,7 @@ import { Readable, Transform, Writable } from 'node:stream';
 import zlib from 'node:zlib';
 import tar from 'tar-stream';
 import { config } from './config.js';
-import { audit, now, q, shareUsage, type Box, type Share } from './db.js';
+import { audit, now, q, shareUsage, upsertFiles, type Box, type Share } from './db.js';
 
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 
@@ -116,8 +116,9 @@ export const fmt = (n: number) => {
 };
 
 // Write a stream into a file at a temporary name, hashing as it goes; rename into place on success.
-export async function receiveFile(abs: string, body: Readable, mtime?: Date): Promise<{ size: number; sha256: string }> {
-  await fsp.mkdir(path.dirname(abs), { recursive: true });
+export async function receiveFile(abs: string, body: Readable, mtime?: Date, dirs?: Set<string>): Promise<{ size: number; sha256: string }> {
+  const dir = path.dirname(abs);
+  if (!dirs?.has(dir)) { await fsp.mkdir(dir, { recursive: true }); dirs?.add(dir); }
   const tmp = `${abs}.bifrost-tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
   const h = createHash('sha256');
   let size = 0;
@@ -135,28 +136,85 @@ export async function receiveFile(abs: string, body: Readable, mtime?: Date): Pr
 }
 
 // Untar a (possibly zstd-compressed) batch into a box. Returns one record per file with the server-computed hash.
+//
+// A tar arrives one entry after another, and until now each file was written to the exchange before the next was
+// looked at: some six round trips to Midgard per file, in a row, per stream. Now an entry is read into memory as
+// it arrives and handed to a writer, and up to batchParallel writers run at once; the tar is only asked for the
+// next entry when there is room for it (in files and in bytes), which is what holds the client back rather than
+// memory here. The batch's rows go into the database together at the end, one transaction.
 export async function receiveBatch(share: Share, box: Box, body: Readable, zstd: boolean, credId: string): Promise<{ path: string; size: number; sha256: string }[]> {
   const root = boxRoot(share, box);
   const extract = tar.extract();
   const results: { path: string; size: number; sha256: string }[] = [];
+  const rows: Parameters<typeof upsertFiles>[0] = [];
+  const record = (rel: string, size: number, sha256: string, mtime?: Date) => {
+    rows.push([share.id, box, rel, size, sha256, mtime ? mtime.toISOString() : null, credId, now()]);
+    results.push({ path: rel, size, sha256 });
+  };
+  const dirs = new Set<string>(); // directories this batch has already made, so a series of files costs one mkdir
+  const parallel = Math.max(1, config.batchParallel);
+  let inflight = 0, inflightBytes = 0, failed: Error | null = null;
+  const writers: Promise<void>[] = [];
+  let resume: (() => void) | null = null;
+  const room = () => inflight < parallel && inflightBytes < config.batchBuffer;
+  const settle = () => { if (!resume || !room()) return; const r = resume; resume = null; r(); };
   extract.on('entry', (header, stream, next) => {
     if (header.type !== 'file') { stream.resume(); stream.on('end', () => next()); return; }
     let rel: string;
     try { rel = cleanPath(header.name); } catch (e) { stream.resume(); stream.on('end', () => next(e as Error)); return; }
-    receiveFile(path.join(root, rel), stream as unknown as Readable, header.mtime)
-      .then(({ size, sha256 }) => {
-        q.upsertFile.run(share.id, box, rel, size, sha256, header.mtime ? header.mtime.toISOString() : null, credId, now());
-        results.push({ path: rel, size, sha256 });
-        next();
-      })
-      .catch((e) => next(e));
+    // One at a time, or an entry too big to hold: written straight from the stream, as before. Files this size
+    // are rare in a batch (everything from largeFile up goes as parts), and one of them is not worth the memory.
+    if (parallel === 1 || header.size > config.batchBuffer / 4) {
+      receiveFile(path.join(root, rel), stream as unknown as Readable, header.mtime, dirs)
+        .then(({ size, sha256 }) => { record(rel, size, sha256, header.mtime); next(); })
+        .catch((e) => next(e));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    stream.on('data', (c) => chunks.push(c as Buffer));
+    stream.on('error', (e) => next(e));
+    stream.on('end', () => {
+      if (failed) return next(failed);
+      const buf = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
+      inflight++; inflightBytes += buf.length;
+      writers.push(writeBuffer(path.join(root, rel), buf, header.mtime, dirs)
+        .then(({ size, sha256 }) => { record(rel, size, sha256, header.mtime); })
+        .catch((e) => { failed ??= e as Error; })
+        .finally(() => { inflight--; inflightBytes -= buf.length; settle(); }));
+      // Ask for the next entry only when there is room for it: this is the back pressure on the client.
+      if (room()) next();
+      else resume = () => next(failed ?? undefined);
+    });
   });
   // The body goes through pipeline() with the decompressor, never body.pipe(): pipe() forwards data but not
   // errors, so a client that vanished mid-upload left the extractor waiting forever, the request never
   // returned, and the caller's stream slot stayed taken (2026-09-02: 17 such requests pinned the budget).
-  if (zstd) await pipeline(body, zlib.createZstdDecompress(), extract);
-  else await pipeline(body, extract);
+  try {
+    if (zstd) await pipeline(body, zlib.createZstdDecompress(), extract);
+    else await pipeline(body, extract);
+  } finally {
+    await Promise.allSettled(writers);
+  }
+  if (failed) throw failed;
+  if (rows.length) upsertFiles(rows);
   return results;
+}
+
+// One whole file from memory: open, one write, close, the mtime, the rename. Hashed here rather than on the way
+// in, so the hash is of what was written.
+async function writeBuffer(abs: string, buf: Buffer, mtime: Date | undefined, dirs: Set<string>): Promise<{ size: number; sha256: string }> {
+  const dir = path.dirname(abs);
+  if (!dirs.has(dir)) { await fsp.mkdir(dir, { recursive: true }); dirs.add(dir); }
+  const tmp = `${abs}.bifrost-tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    await fsp.writeFile(tmp, buf);
+    if (mtime) await fsp.utimes(tmp, mtime, mtime).catch(() => {});
+    await fsp.rename(tmp, abs);
+  } catch (e) {
+    await fsp.unlink(tmp).catch(() => {});
+    throw e;
+  }
+  return { size: buf.length, sha256: createHash('sha256').update(buf).digest('hex') };
 }
 
 // Pack files of a box into a tar stream (optionally zstd). `paths` may include directories; they are expanded.
