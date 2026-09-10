@@ -24,6 +24,9 @@ fi
 tail -3 "$log"
 rm -f "$log"
 docker image prune -f > /dev/null
+# Every build also leaves its layers in BuildKit's cache, and nothing else ever clears it (972 MB by September 2026).
+# Three days is all a rebuild reuses.
+docker builder prune -f --filter until=72h > /dev/null
 sleep 3
 # Give the server a moment to come up, but do not wait for ever: report what it says, and fail if it never does.
 for i in $(seq 1 20); do
