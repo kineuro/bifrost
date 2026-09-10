@@ -9,7 +9,7 @@ import path from 'node:path';
 import { canUpload, readSession, shareOpen } from './auth.js';
 import { config } from './config.js';
 import { audit, now, q } from './db.js';
-import { checkQuota, cleanPath, resolveIn, sha256File } from './files.js';
+import { checkQuota, cleanPath, moveInto, resolveIn, sha256File } from './files.js';
 import { metrics } from './metrics.js';
 
 const dir = path.join(config.stateRoot, 'tus');
@@ -52,7 +52,7 @@ export const tus = new Server({
     const src = path.join(dir, upload.id);
     const dst = resolveIn(share, 'in', rel);
     await fsp.mkdir(path.dirname(dst), { recursive: true });
-    await fsp.rename(src, dst);
+    await moveInto(src, dst);
     await fsp.unlink(`${src}.json`).catch(() => {});
     const sha = await sha256File(dst);
     const size = upload.size ?? (await fsp.stat(dst)).size;

@@ -12,7 +12,7 @@ import { pipeline } from 'node:stream/promises';
 import { canDownload, canUpload, checkPasscode, credentialFromToken, issueSession, rateLimited, readSession, recordFailure, shareOpen, touch } from '../auth.js';
 import { config } from '../config.js';
 import { audit, now, q, shareUsage, type Box, type Credential, type Share } from '../db.js';
-import { acquire, checkDownloadBudget, checkQuota, cleanPath, dropUpload, HttpError, listDir, receiveBatch, receiveFile, resolveIn, sendBatch, walk } from '../files.js';
+import { acquire, checkDownloadBudget, checkQuota, cleanPath, dropUpload, HttpError, listDir, moveInto, partFile, partPath, receiveBatch, receiveFile, resolveIn, sendBatch, walk } from '../files.js';
 import { notifyTransfer } from '../notify.js';
 import { metrics } from '../metrics.js';
 
@@ -153,8 +153,9 @@ pub.post('/upload/init', async (c) => {
     checkQuota(share, size, 1);
     const id = randomBytes(12).toString('hex');
     const total = Math.max(1, Math.ceil(size / config.partSize));
-    await fsp.mkdir(path.join(config.stateRoot, 'parts'), { recursive: true });
-    const fh = await fsp.open(path.join(config.stateRoot, 'parts', `${id}.part`), 'w');
+    const part = partPath({ id, share_id: share.id });
+    await fsp.mkdir(path.dirname(part), { recursive: true });
+    const fh = await fsp.open(part, 'w');
     await fh.truncate(size); await fh.close();
     q.insertUpload.run(id, share.id, cred.id, p, size, sha256, config.partSize, total, '', now(), now());
     u = q.upload.get(id)!;
@@ -175,7 +176,7 @@ pub.put('/upload/:id/part/:n', async (c) => {
     const h = createHash('sha256');
     const offset = n * u.part_size;
     const expectedLen = Math.min(u.part_size, u.size - offset);
-    const fh = await fsp.open(path.join(config.stateRoot, 'parts', `${u.id}.part`), 'r+');
+    const fh = await fsp.open(await partFile(u), 'r+');
     let pos = offset, len = 0;
     try {
       await pipeline(Readable.fromWeb(c.req.raw.body as any), new Writable({
@@ -199,15 +200,15 @@ pub.post('/upload/:id/complete', async (c) => {
   if (!u || u.share_id !== share.id) throw new HttpError(404, 'no such upload');
   const done = partsList(u.parts_done);
   if (done.length !== u.parts_total) throw new HttpError(409, `missing parts: ${u.parts_total - done.length} of ${u.parts_total}`);
-  const src = path.join(config.stateRoot, 'parts', `${u.id}.part`);
+  const src = await partFile(u);
   const dst = resolveIn(share, 'in', u.path);
-  // Final whole-file verification against the client's hash, then move into place (same dataset: a rename).
+  // Final whole-file verification against the client's hash, then move into place (a rename: the parts are staged in the inbox).
   const h = createHash('sha256');
   await pipeline(fs.createReadStream(src, { highWaterMark: 8 * 1024 * 1024 }), new Writable({ write(ch, _e, cb) { h.update(ch); cb(); } }));
   const sum = h.digest('hex');
   if (sum !== u.sha256) { await dropUpload(u.id); throw new HttpError(409, 'whole-file checksum mismatch; upload again'); }
   await fsp.mkdir(path.dirname(dst), { recursive: true });
-  await fsp.rename(src, dst);
+  await moveInto(src, dst);
   q.upsertFile.run(share.id, 'in', u.path, u.size, sum, null, cred.id, now());
   q.deleteUpload.run(u.id);
   q.transfer.run(share.id, cred.id, 'upload', u.size, 1, now(), c.get('ip'), c.req.header('user-agent') ?? '');

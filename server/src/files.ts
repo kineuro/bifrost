@@ -24,6 +24,7 @@ export function cleanPath(p: string): string {
   const parts = p.replace(/\\/g, '/').split('/').filter((s) => s !== '' && s !== '.');
   if (parts.some((s) => s === '..' || /[\x00-\x1f]/.test(s) || s.length > 255)) throw new HttpError(400, `invalid path: ${p}`);
   if (parts.length > 64) throw new HttpError(400, 'path too deep');
+  if (parts.some((s) => s.startsWith('.bifrost'))) throw new HttpError(400, `invalid path: ${p}`);
   return parts.join('/');
 }
 export function resolveIn(share: Share, box: Box, rel: string): string {
@@ -31,6 +32,37 @@ export function resolveIn(share: Share, box: Box, rel: string): string {
   const abs = path.resolve(root, cleanPath(rel));
   if (abs !== root && !abs.startsWith(root + path.sep)) throw new HttpError(400, 'invalid path');
   return abs;
+}
+
+// Where a large file's parts are written while it arrives: inside the bridge's own inbox, in a folder every listing
+// hides, so that finishing the file is a rename within one file system even when the inbox is a dataset of its own
+// (bifrost-inbox-dataset on Asgard, so that bifrost-accept --move can rename it into the archive). Until September
+// 2026 parts were staged in .bifrost/parts on the exchange itself; an upload begun there still finishes there.
+export const partPath = (u: { id: string; share_id: string }) => path.join(config.inRoot, u.share_id, '.bifrost-parts', `${u.id}.part`);
+const legacyPartPath = (id: string) => path.join(config.stateRoot, 'parts', `${id}.part`);
+export async function partFile(u: { id: string; share_id: string }): Promise<string> {
+  const legacy = legacyPartPath(u.id);
+  return (await fsp.stat(legacy).then(() => true, () => false)) ? legacy : partPath(u);
+}
+
+// Put a finished file in its place. A rename when both ends are on one file system. When they are not (EXDEV: tus
+// keeps its files in .bifrost/tus, and an inbox can be its own dataset), a copy under a temporary name in the
+// destination's folder, then the rename, then the source goes: nothing half-copied ever carries the final name.
+export async function moveInto(src: string, dst: string) {
+  try {
+    await fsp.rename(src, dst);
+  } catch (e: any) {
+    if (e?.code !== 'EXDEV') throw e;
+    const tmp = `${dst}.bifrost-tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+    try {
+      await fsp.copyFile(src, tmp);
+      await fsp.rename(tmp, dst);
+    } catch (err) {
+      await fsp.unlink(tmp).catch(() => {});
+      throw err;
+    }
+    await fsp.unlink(src);
+  }
 }
 
 export interface Entry { name: string; path: string; dir: boolean; size: number; mtime: string; sha256?: string | null }
@@ -277,12 +309,24 @@ export async function sweepTemp(root: string, cutoff = Date.now() - 86400_000) {
 
 // Delete an upload's partial file and record.
 export async function dropUpload(id: string) {
-  await fsp.unlink(path.join(config.stateRoot, 'parts', `${id}.part`)).catch(() => {});
+  const u = q.upload.get(id);
+  if (u) await fsp.unlink(partPath(u)).catch(() => {});
+  await fsp.unlink(legacyPartPath(id)).catch(() => {});
   q.deleteUpload.run(id);
 }
 
 export async function removeShareData(share: Share, actor: string) {
-  for (const b of ['in', 'out'] as Box[]) await fsp.rm(boxRoot(share, b), { recursive: true, force: true });
+  for (const b of ['in', 'out'] as Box[]) await removeBox(boxRoot(share, b));
   for (const u of q.uploadsOf.all(share.id)) await dropUpload(u.id);
   audit(actor, 'data.removed', share.id, {});
+}
+
+// A box that is a dataset of its own is a mount point: everything in it can go, the folder itself cannot (EBUSY).
+async function removeBox(root: string) {
+  try {
+    await fsp.rm(root, { recursive: true, force: true });
+  } catch (e: any) {
+    if (e?.code !== 'EBUSY') throw e;
+    for (const n of await fsp.readdir(root)) await fsp.rm(path.join(root, n), { recursive: true, force: true });
+  }
 }

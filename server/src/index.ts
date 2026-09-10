@@ -115,7 +115,7 @@ async function housekeeping(sweep = false) {
     }
     if (s.status === 'closed' && s.updated_at < new Date(Date.now() - config.graceDays * 86400_000).toISOString()) {
       const dir = path.join(config.inRoot, s.id);
-      if (fs.existsSync(dir) || fs.existsSync(path.join(config.outRoot, s.id))) await removeShareData(s, 'housekeeping');
+      if (fs.existsSync(dir) || fs.existsSync(path.join(config.outRoot, s.id))) await removeShareData(s, 'housekeeping').catch((e) => console.error(now(), 'housekeeping: removing the data of', s.id, e));
     }
     if (s.status === 'open' && s.expires_at) {
       const days = (new Date(s.expires_at).getTime() - Date.now()) / 86400_000;
