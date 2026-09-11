@@ -119,6 +119,27 @@ type localFile struct {
 // one join, and only at the moment a file is opened.
 func (f *localFile) abs(root string) string { return filepath.Join(root, filepath.FromSlash(f.rel)) }
 
+// fileBase is the folder a push or a verify reads files from: the root itself, or, when the root is a single file, the
+// folder that holds it. walkFiles names a single file by its base name, so joining that name to the file's own path
+// opened "file/file" and failed with "not a directory" (a push of one marker file never went, 2026-09-11).
+func fileBase(root string) string {
+	if st, err := os.Stat(root); err == nil && !st.IsDir() {
+		return filepath.Dir(root)
+	}
+	return root
+}
+
+// joinRemote puts a relative path under a bridge folder the way push does: backslashes become separators and the
+// prefix loses its slashes at both ends, so "--to /" is the bridge's root. verify used to keep the slash and looked
+// for "/name", which it never found, so everything pushed with --to / verified as missing.
+func joinRemote(prefix, rel string) string {
+	prefix = strings.Trim(strings.ReplaceAll(prefix, "\\", "/"), "/")
+	if prefix == "" {
+		return rel
+	}
+	return prefix + "/" + rel
+}
+
 // walkFiles reads the tree under root with a fixed pool of workers (a directory is the unit of work) and sends
 // every regular file to out, closing it when the tree is exhausted. It keeps only the directories it has still
 // to visit, so the caller alone decides how much of the tree is in memory at once. The pool is fixed rather
@@ -587,6 +608,7 @@ func cmdPush(ctx context.Context, args []string) error {
 	}
 	prog := newProgress(o.jsonOut)
 	abs, _ := filepath.Abs(src)
+	base := fileBase(abs) // where the indexed files are opened from
 	prefix := o.to
 	if prefix == "" {
 		if st, _ := os.Stat(abs); st != nil && st.IsDir() {
@@ -666,7 +688,7 @@ func cmdPush(ctx context.Context, args []string) error {
 	for chunk := range chunks {
 		if o.checksum {
 			prog.note("hashing local files")
-			hashAll(ctx, abs, chunk, 8)
+			hashAll(ctx, base, chunk, 8)
 		}
 		missing, resumable, have, err := planChunk(ctx, c, chunk, remote, prog)
 		if err != nil {
@@ -701,7 +723,7 @@ func cmdPush(ctx context.Context, args []string) error {
 			}
 			f, r := f, resumable[remote(f.rel)]
 			if !send(func() error {
-				return pushLarge(ctx, c, abs, f, remote(f.rel), lim, r.id, r.parts, rl, prog, o.workers, sem)
+				return pushLarge(ctx, c, base, f, remote(f.rel), lim, r.id, r.parts, rl, prog, o.workers, sem)
 			}) {
 				stop = true
 				break
@@ -710,7 +732,7 @@ func cmdPush(ctx context.Context, args []string) error {
 		if !stop {
 			for _, b := range makeBatches(small, lim.BatchBytes, lim.BatchFiles) {
 				b := b
-				if !send(func() error { return pushBatch(ctx, c, abs, b, remote, rl, prog, sem) }) {
+				if !send(func() error { return pushBatch(ctx, c, base, b, remote, rl, prog, sem) }) {
 					stop = true
 					break
 				}
@@ -1669,6 +1691,7 @@ func cmdVerify(ctx context.Context, args []string) error {
 		prefix = o.from
 	}
 	abs, _ := filepath.Abs(o.positional[0])
+	base := fileBase(abs) // where the indexed files are opened from
 	if prefix == "" && box == "in" {
 		if st, _ := os.Stat(abs); st != nil && st.IsDir() {
 			prefix = filepath.Base(abs)
@@ -1680,7 +1703,7 @@ func cmdVerify(ctx context.Context, args []string) error {
 		return err
 	}
 	prog.note("hashing local files")
-	hashAll(ctx, abs, files, 8)
+	hashAll(ctx, base, files, 8)
 	var man struct {
 		Files []Entry `json:"files"`
 	}
@@ -1695,10 +1718,7 @@ func cmdVerify(ctx context.Context, args []string) error {
 	}
 	var ok, bad, missing int
 	for _, f := range files {
-		rp := f.rel
-		if prefix != "" {
-			rp = strings.Trim(prefix, "/") + "/" + f.rel
-		}
+		rp := joinRemote(prefix, f.rel)
 		e, found := remote[rp]
 		switch {
 		case !found:
