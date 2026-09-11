@@ -6,12 +6,16 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-11
+
 ### Changed
 - A bridge's inbox can be a ZFS dataset of its own, so that an administrator can rename a finished inbox into the archive in seconds instead of copying it (`bifrost-accept --move` on Asgard). Nothing the server does assumes any more that an inbox shares a file system with the server's own state: the parts of a large file are staged inside the bridge's inbox (`.bifrost-parts/`, hidden like every `.bifrost` name) instead of `.bifrost/parts/`, and a finished browser upload that has to cross file systems is copied into place under a temporary name before it takes its final name. An upload begun before this change finishes where it started.
 - A path with a name that begins with `.bifrost` is refused, as the path rules always said: those names belong to the server.
 
 ### Fixed
 - Housekeeping carries on past a bridge whose data it cannot remove, instead of stopping the whole pass there.
+- `bifrost push` and `bifrost verify` work on a single file. A file given on its own was listed under its own name and then opened as `<file>/<name>`, which failed with "not a directory" on every attempt, so a push of one file retried until it gave up. Folders were not affected.
+- `bifrost verify --to /` compares against the bridge's root. It looked for every file under a leading slash, found none, and reported everything pushed with `--to /` as missing.
 
 ## [1.2.0] - 2026-09-07
 
