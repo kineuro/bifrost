@@ -11,7 +11,7 @@ import { Readable, Transform, Writable, PassThrough } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { canDownload, canUpload, checkPasscode, credentialFromToken, issueSession, rateLimited, readSession, recordFailure, shareOpen, touch } from '../auth.js';
 import { config } from '../config.js';
-import { audit, now, q, shareUsage, type Box, type Credential, type Share } from '../db.js';
+import { audit, now, q, shareUsage, type Box, type Credential, type Share, type Upload } from '../db.js';
 import { acquire, checkDownloadBudget, checkQuota, cleanPath, dropUpload, HttpError, listDir, moveInto, partFile, partPath, receiveBatch, receiveFile, resolveIn, sendBatch, walk } from '../files.js';
 import { notifyTransfer } from '../notify.js';
 import { metrics } from '../metrics.js';
@@ -194,10 +194,16 @@ pub.put('/upload/:id/part/:n', async (c) => {
     return c.json({ part: n, sha256: sum, parts_done: done.size, parts_total: u.parts_total });
   } finally { release(); }
 });
-pub.post('/upload/:id/complete', async (c) => {
-  const share = c.get('share'), cred = c.get('cred');
-  const u = q.upload.get(c.req.param('id'));
-  if (!u || u.share_id !== share.id) throw new HttpError(404, 'no such upload');
+// Completing reads the whole file once more, and for a file of hundreds of GB that outlasts a client's wait for an
+// answer: on 2026-11-02 a 1.3.0 CLI asked again four times while the first check ran, each request read all 362 GB
+// once more, the first to finish moved the file into place and the others failed on the rename (ENOENT), so the
+// file landed and the CLI reported it failed. So there is one check per upload: a request that comes while it runs
+// joins it, and one that comes within the hour after gets the same answer, since the upload itself is gone by then.
+type Completed = { share: string; body: { ok: true; path: string; size: number; sha256: string } };
+const completing = new Map<string, Promise<Completed>>();
+const completedKept = 60 * 60 * 1000;
+
+async function completeUpload(u: Upload, share: Share, cred: Credential, ip: string, agent: string): Promise<Completed> {
   const done = partsList(u.parts_done);
   if (done.length !== u.parts_total) throw new HttpError(409, `missing parts: ${u.parts_total - done.length} of ${u.parts_total}`);
   const src = await partFile(u);
@@ -211,8 +217,23 @@ pub.post('/upload/:id/complete', async (c) => {
   await moveInto(src, dst);
   q.upsertFile.run(share.id, 'in', u.path, u.size, sum, null, cred.id, now());
   q.deleteUpload.run(u.id);
-  q.transfer.run(share.id, cred.id, 'upload', u.size, 1, now(), c.get('ip'), c.req.header('user-agent') ?? '');
-  return c.json({ ok: true, path: u.path, size: u.size, sha256: sum });
+  q.transfer.run(share.id, cred.id, 'upload', u.size, 1, now(), ip, agent);
+  return { share: share.id, body: { ok: true, path: u.path, size: u.size, sha256: sum } };
+}
+
+pub.post('/upload/:id/complete', async (c) => {
+  const share = c.get('share'), id = c.req.param('id');
+  let job = completing.get(id);
+  if (!job) {
+    const u = q.upload.get(id);
+    if (!u || u.share_id !== share.id) throw new HttpError(404, 'no such upload');
+    job = completeUpload(u, share, c.get('cred'), c.get('ip'), c.req.header('user-agent') ?? '');
+    completing.set(id, job);
+    job.then(() => { setTimeout(() => completing.delete(id), completedKept).unref(); }, () => completing.delete(id));
+  }
+  const r = await job;
+  if (r.share !== share.id) throw new HttpError(404, 'no such upload');
+  return c.json(r.body);
 });
 pub.delete('/upload/:id', async (c) => {
   const u = q.upload.get(c.req.param('id'));

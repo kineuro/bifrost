@@ -6,6 +6,11 @@ The server, the web page and the CLI are released together under one version. `b
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-02
+
+### Fixed
+- A large file that arrived is no longer reported as failed. Before it answers a complete, the server reads the whole file once more to check it against the client's checksum, and for a file of 362 GB that took 11 to 15 minutes, while the CLI waited 5 minutes for an answer and then asked again. Each new ask started another full read of the same file beside the first; the first to finish put the file in place, the others failed on the rename (`ENOENT`, counted as server errors), and the CLI gave up on a file that had landed with the right checksum. The server now runs one check per upload: an ask that comes while it runs joins it, and one that comes within the hour after gets the same answer. The CLI waits for a complete 5 minutes plus the file's size at 100 MiB/s, and when the server no longer knows the upload (a restart forgets the answer) it asks the bridge whether the file is there with its checksum before it calls the file failed. A CLI of 1.3.0 or earlier gains from the server side alone while the check takes less than about 25 minutes, its five asks of 5 minutes each.
+
 ## [1.3.0] - 2026-09-11
 
 ### Changed
