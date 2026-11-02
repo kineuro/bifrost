@@ -1092,14 +1092,44 @@ func pushLarge(ctx context.Context, c *Client, root string, f *localFile, rpath 
 		prog.fail(f.rel, err)
 		return err
 	}
-	if err := retry(ctx, 5, func() error {
-		return c.json(ctx, "POST", fmt.Sprintf("/api/upload/%s/complete", init.UploadID), map[string]any{}, nil)
-	}); err != nil {
+	if err := completeLarge(ctx, c, init.UploadID, f, rpath); err != nil {
 		prog.fail(f.rel, err)
 		return err
 	}
 	prog.add(0, 1)
 	return nil
+}
+
+// The server reads the whole file once more before it answers a complete: 362 GB took it 11 to 15 minutes on
+// 2026-11-02, against the 5 minutes any other request waits. So a complete waits that long plus the file's size at
+// completeRate, the slowest the check is assumed to run.
+const completeRate = 100 << 20 // bytes per second
+
+func completeWait(size int64) time.Duration {
+	return answerWait + time.Duration(size/completeRate)*time.Second
+}
+
+// completeLarge asks the server to check and place a file whose parts have all arrived. An ask the server has
+// forgotten (404) may still have succeeded: an earlier ask can finish after its client stopped waiting, and a server
+// restarted since keeps no note of it. The bridge itself says whether the file is there with this checksum.
+func completeLarge(ctx context.Context, c *Client, id string, f *localFile, rpath string) error {
+	err := retry(ctx, 5, func() error {
+		cctx, cancel := context.WithTimeout(ctx, completeWait(f.size))
+		defer cancel()
+		return c.jsonVia(c.patient, cctx, "POST", fmt.Sprintf("/api/upload/%s/complete", id), map[string]any{}, nil)
+	})
+	var ae *apiError
+	if err == nil || !errors.As(err, &ae) || ae.Status != 404 {
+		return err
+	}
+	var pr planResp
+	req := struct {
+		Files []planFile `json:"files"`
+	}{Files: []planFile{{Path: rpath, Size: f.size, Sha256: f.sha}}}
+	if e := retry(ctx, 5, func() error { return c.json(ctx, "POST", "/api/plan", req, &pr) }); e == nil && len(pr.Have) == 1 && pr.Have[0] == rpath {
+		return nil
+	}
+	return err
 }
 
 func min64(a, b int64) int64 {

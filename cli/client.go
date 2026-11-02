@@ -64,7 +64,13 @@ func saveConfig(c Config) error {
 type Client struct {
 	cfg  Config
 	http *http.Client
+	// patient has no limit of its own on the wait for an answer; each request through it sets one in its context.
+	// Completing a large file is the one such request: the server reads the whole file again before it answers.
+	patient *http.Client
 }
+
+// How long a request waits for the server to start answering.
+const answerWait = 5 * time.Minute
 
 func newClient() (*Client, error) {
 	cfg := loadConfig()
@@ -74,9 +80,11 @@ func newClient() (*Client, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.MaxIdleConnsPerHost = 32
 	tr.MaxConnsPerHost = 0
-	tr.ResponseHeaderTimeout = 5 * time.Minute
+	tr.ResponseHeaderTimeout = answerWait
 	tr.IdleConnTimeout = 90 * time.Second
-	return &Client{cfg: cfg, http: &http.Client{Transport: tr}}, nil
+	slow := tr.Clone()
+	slow.ResponseHeaderTimeout = 0
+	return &Client{cfg: cfg, http: &http.Client{Transport: tr}, patient: &http.Client{Transport: slow}}, nil
 }
 
 type apiError struct {
@@ -89,6 +97,10 @@ type apiError struct {
 func (e *apiError) Error() string { return fmt.Sprintf("%s (HTTP %d)", e.Message, e.Status) }
 
 func (c *Client) req(ctx context.Context, method, path string, body io.Reader, hdr map[string]string) (*http.Response, error) {
+	return c.send(c.http, ctx, method, path, body, hdr)
+}
+
+func (c *Client) send(hc *http.Client, ctx context.Context, method, path string, body io.Reader, hdr map[string]string) (*http.Response, error) {
 	r, err := http.NewRequestWithContext(ctx, method, c.cfg.URL+path, body)
 	if err != nil {
 		return nil, err
@@ -101,7 +113,7 @@ func (c *Client) req(ctx context.Context, method, path string, body io.Reader, h
 	for k, v := range hdr {
 		r.Header.Set(k, v)
 	}
-	res, err := c.http.Do(r)
+	res, err := hc.Do(r)
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +139,10 @@ func (c *Client) req(ctx context.Context, method, path string, body io.Reader, h
 }
 
 func (c *Client) json(ctx context.Context, method, path string, in any, out any) error {
+	return c.jsonVia(c.http, ctx, method, path, in, out)
+}
+
+func (c *Client) jsonVia(hc *http.Client, ctx context.Context, method, path string, in any, out any) error {
 	var body io.Reader
 	hdr := map[string]string{}
 	if in != nil {
@@ -134,7 +150,7 @@ func (c *Client) json(ctx context.Context, method, path string, in any, out any)
 		body = bytes.NewReader(b)
 		hdr["Content-Type"] = "application/json"
 	}
-	res, err := c.req(ctx, method, path, body, hdr)
+	res, err := c.send(hc, ctx, method, path, body, hdr)
 	if err != nil {
 		return err
 	}
